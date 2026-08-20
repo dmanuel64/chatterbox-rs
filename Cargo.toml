@@ -17,7 +17,7 @@ serde_json = { version = "1", optional = true }
 symphonia = "0.6"
 thiserror = "2"
 tokenizers = "0.23"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["fs", "io-util"], optional = true }
 url = { version = "2", optional = true }
 
 [features]
@@ -32,7 +32,7 @@ all-audio-formats = ["symphonia/all"]
 
 watermark = []
 
-download = ["dep:reqwest", "dep:futures", "dep:url"]
+download = ["dep:reqwest", "dep:futures", "dep:url", "dep:tokio"]
 
 read-model-constants = ["dep:serde", "dep:serde_json"]
 

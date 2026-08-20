@@ -3,9 +3,8 @@ use directories::ProjectDirs;
 use std::env;
 use std::{
     path::{Path, PathBuf},
-    sync::LazyLock,
+    sync::{LazyLock, RwLock},
 };
-use tokio::sync::RwLock;
 
 static DIRS: LazyLock<ProjectDirs> = LazyLock::new(|| {
     ProjectDirs::from("io.github", "dmanuel64", "chatterbox-rs")

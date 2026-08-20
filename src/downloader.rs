@@ -100,7 +100,8 @@ async fn download_hf_file(
             source,
         })?;
     file_url.set_query(Some("download=true"));
-    download_file(file_url, dest, config::HF_TOKEN.read().await.clone(), force).await
+    let auth_token = config::HF_TOKEN.read().expect("HF_TOKEN lock poisoned").clone();
+    download_file(file_url, dest, auth_token, force).await
 }
 
 async fn download_chatterbot_file(source: &str, dest: &Path, force: bool) -> Result<(), Error> {
@@ -131,15 +132,19 @@ async fn download_chatterbot_files(targets: impl Iterator<Item = SourceDest>) ->
                  force,
              }| async move { download_chatterbot_file(&source, &dest, force).await },
         )
-        .buffer_unordered(*config::MAX_CONCURRENT_DOWNLOADS.read().await)
+        .buffer_unordered(
+            *config::MAX_CONCURRENT_DOWNLOADS
+                .read()
+                .expect("MAX_CONCURRENT_DOWNLOADS lock poisoned"),
+        )
         .try_collect::<()>()
         .await
 }
 
-async fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDest> {
+fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDest> {
     let mut targets = Vec::with_capacity(models.len() * 2);
     for m in models {
-        let graph_dest = m.graph_file().await;
+        let graph_dest = m.graph_file();
         let graph_source = format!(
             "onnx/{}",
             graph_dest
@@ -147,7 +152,7 @@ async fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<So
                 .expect("a filename to be present")
                 .to_string_lossy()
         );
-        let weights_dest = m.weights_file().await;
+        let weights_dest = m.weights_file();
         let weights_source = format!(
             "onnx/{}",
             weights_dest
@@ -173,63 +178,72 @@ pub async fn download_onnx_models(
     models: &[impl ChatterboxOnnxFile],
     force: bool,
 ) -> Result<(), Error> {
-    let targets = onnx_targets(models, force).await;
+    let targets = onnx_targets(models, force);
     download_chatterbot_files(targets.into_iter()).await
 }
 
-async fn tokenizer_target(force: bool) -> SourceDest {
+fn tokenizer_target(force: bool) -> SourceDest {
     SourceDest {
         source: "tokenizer.json".to_string(),
-        dest: config::TOKENIZER_PATH.read().await.clone(),
+        dest: config::TOKENIZER_PATH
+            .read()
+            .expect("TOKENIZER_PATH lock poisoned")
+            .clone(),
         force,
     }
 }
 
 pub async fn download_tokenizer(force: bool) -> Result<(), Error> {
-    let targets = [tokenizer_target(force).await];
+    let targets = [tokenizer_target(force)];
     download_chatterbot_files(targets.into_iter()).await
 }
 
 #[cfg(feature = "read-model-constants")]
-async fn generation_config_target(force: bool) -> SourceDest {
+fn generation_config_target(force: bool) -> SourceDest {
     SourceDest {
         source: "generation_config.json".to_string(),
-        dest: config::GENERATION_CONFIG_PATH.read().await.clone(),
+        dest: config::GENERATION_CONFIG_PATH
+            .read()
+            .expect("GENERATION_CONFIG_PATH lock poisoned")
+            .clone(),
         force,
     }
 }
 
 #[cfg(feature = "read-model-constants")]
 pub async fn download_generation_config(force: bool) -> Result<(), Error> {
-    let targets = [generation_config_target(force).await];
+    let targets = [generation_config_target(force)];
     download_chatterbot_files(targets.into_iter()).await
 }
 
 #[cfg(feature = "read-model-constants")]
-async fn preprocessor_config_target(force: bool) -> SourceDest {
+fn preprocessor_config_target(force: bool) -> SourceDest {
     SourceDest {
         source: "preprocessor_config.json".to_string(),
-        dest: config::PREPROCESSOR_CONFIG_PATH.read().await.clone(),
+        dest: config::PREPROCESSOR_CONFIG_PATH
+            .read()
+            .expect("PREPROCESSOR_CONFIG_PATH lock poisoned")
+            .clone(),
         force,
     }
 }
 
 #[cfg(feature = "read-model-constants")]
 pub async fn download_preprocessor_config(force: bool) -> Result<(), Error> {
-    let targets = [preprocessor_config_target(force).await];
+    let targets = [preprocessor_config_target(force)];
     download_chatterbot_files(targets.into_iter()).await
 }
 
 pub async fn download_missing(models: &[impl ChatterboxOnnxFile]) -> Result<(), Error> {
-    let mut targets: Vec<_> = onnx_targets(models, false).await;
-    targets.push(tokenizer_target(false).await);
+    let mut targets: Vec<_> = onnx_targets(models, false);
+    targets.push(tokenizer_target(false));
     #[cfg(feature = "read-model-constants")]
     {
-        targets.push(generation_config_target(false).await);
+        targets.push(generation_config_target(false));
     }
     #[cfg(feature = "read-model-constants")]
     {
-        targets.push(preprocessor_config_target(false).await);
+        targets.push(preprocessor_config_target(false));
     }
     download_chatterbot_files(targets.into_iter()).await
 }

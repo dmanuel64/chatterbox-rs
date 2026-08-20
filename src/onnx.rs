@@ -35,13 +35,13 @@ pub trait ChatterboxOnnxFile {
         )
     }
 
-    async fn graph_file(&self) -> PathBuf {
-        let onnx_dir = config::ONNX_DIR.read().await;
+    fn graph_file(&self) -> PathBuf {
+        let onnx_dir = config::ONNX_DIR.read().expect("ONNX_DIR lock poisoned");
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx"))
     }
 
-    async fn weights_file(&self) -> PathBuf {
-        let onnx_dir = config::ONNX_DIR.read().await;
+    fn weights_file(&self) -> PathBuf {
+        let onnx_dir = config::ONNX_DIR.read().expect("ONNX_DIR lock poisoned");
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx_data"))
     }
 }
