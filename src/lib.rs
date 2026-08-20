@@ -1,14 +1,40 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+mod audio;
+pub mod config;
+mod s3gen;
+mod t3;
+mod tokenizer;
+mod voice_encoder;
+#[cfg(feature = "watermark")]
+mod watermark;
+
+use ort::device::Device;
+use std::path::Path;
+
+pub struct ChatterboxTts {
+    tokenizer: Tokenizer,
+    voice_encoder: VoiceEncoder,
+    t3: T3Session,
+    s3gen: S3Gen,
+    sample_rate: u32,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub struct GenerateOptions {
+    pub exaggeration: f32,
+    pub cfg_weight: f32,
+    pub temperature: f32,
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl ChatterboxTts {
+    pub fn load(model_dir: impl AsRef<Path>, device: Device) -> Result<Self, ChatterboxError> {
+        todo!()
+    }
+
+    pub fn generate(
+        &mut self,
+        text: &str,
+        reference_audio_path: impl AsRef<Path>,
+        opts: GenerateOptions,
+    ) -> Result<Vec<f32>, ChatterboxError> {
+        todo!()
     }
 }
