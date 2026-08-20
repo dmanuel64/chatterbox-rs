@@ -4,17 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hound = "3.5.1"
+directories = "6"
+hound = "3"
 ndarray = "0.17"
 ort = "2.0.0-rc.13"
 rand = "0.10"
+reqwest = { version = "0.13", features = ["blocking"], optional = true }
 rubato = "5"
 symphonia = "0.6"
 thiserror = "2"
 tokenizers = "0.23"
 
 [features]
-default = ["common-audio-formats"]
+default = ["common-audio-formats", "download"]
 
 cuda = ["ort/cuda"]
 
@@ -24,6 +26,8 @@ common-audio-formats = ["mp3", "mp4"]
 all-audio-formats = ["symphonia/all"]
 
 watermark = []
+
+download = ["dep:reqwest"]
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }

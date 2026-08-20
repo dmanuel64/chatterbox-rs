@@ -1,11 +1,14 @@
 mod audio;
 pub mod config;
+pub mod errors;
 mod s3gen;
 mod t3;
 mod tokenizer;
 mod voice_encoder;
 #[cfg(feature = "watermark")]
 mod watermark;
+
+pub use errors::Error as ChatterboxError;
 
 use ort::device::Device;
 use std::path::Path;
@@ -25,7 +28,7 @@ pub struct GenerateOptions {
 }
 
 impl ChatterboxTts {
-    pub fn load(model_dir: impl AsRef<Path>, device: Device) -> Result<Self, ChatterboxError> {
+    pub fn load(device: Device) -> Result<Self, ChatterboxError> {
         todo!()
     }
 
