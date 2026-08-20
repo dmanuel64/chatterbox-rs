@@ -6,9 +6,11 @@ dictionaries:
   - softwareTerms
 words:
   - byoo
+  - chatterbot
   - cuda
   - isomp
   - ndarray
+  - Onnx
   - reqwest
   - thiserror
 ignoreWords: []

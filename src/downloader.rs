@@ -1,0 +1,150 @@
+use futures::{StreamExt, TryStreamExt, stream};
+use reqwest::Url;
+use std::{io, path::Path, str::FromStr, sync::LazyLock};
+use thiserror::Error;
+use tokio::{fs::File, io::AsyncWriteExt};
+
+use crate::{config, onnx::ChatterboxOnnxFile};
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("failed to get remote file: {0}")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("failed to stream file: {source}")]
+    Streaming { url: Url, source: io::Error },
+    #[error("invalid {kind} name: '{name}'")]
+    InvalidName {
+        name: String,
+        kind: &'static str,
+        source: url::ParseError,
+    },
+    #[error("multiple download errors occurred")]
+    Batch { errors: Vec<Self> },
+}
+
+async fn download_file(
+    url: Url,
+    dest: &Path,
+    auth_token: Option<String>,
+    force: bool,
+) -> Result<(), Error> {
+    if force || !dest.exists() {
+        let client = reqwest::Client::new();
+        let mut request = client.get(url.clone());
+        if let Some(t) = auth_token {
+            request = request.bearer_auth(t);
+        }
+        let response = request.send().await?;
+        let mut byte_stream = response.bytes_stream();
+        let mut file = File::create(dest)
+            .await
+            .map_err(|source| Error::Streaming {
+                url: url.clone(),
+                source,
+            })?;
+
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk = chunk_result?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|source| Error::Streaming {
+                    url: url.clone(),
+                    source,
+                })?;
+        }
+    }
+    Ok(())
+}
+
+async fn download_hf_file(
+    owner: &str,
+    repo: &str,
+    source: &str,
+    branch: &str,
+    dest: &Path,
+    force: bool,
+) -> Result<(), Error> {
+    static HF_URL: LazyLock<Url> = LazyLock::new(|| {
+        Url::from_str("https://huggingface.co/").expect("URL to be parsed correctly")
+    });
+
+    let repo_url = HF_URL
+        .join(&format!("{}/", owner.trim_end_matches("/")))
+        .map_err(|source| Error::InvalidName {
+            name: owner.to_string(),
+            kind: "owner",
+            source,
+        })?
+        .join(&format!("{}/", repo.trim_end_matches("/")))
+        .map_err(|source| Error::InvalidName {
+            name: repo.to_string(),
+            kind: "repository",
+            source,
+        })?;
+    let mut file_url = repo_url
+        .join("resolve/")
+        .expect("URL to be parsed correctly")
+        .join(&format!("{}/", branch.trim_end_matches("/")))
+        .map_err(|source| Error::InvalidName {
+            name: branch.to_string(),
+            kind: "branch",
+            source,
+        })?
+        .join(source)
+        .map_err(|source| Error::InvalidName {
+            name: source.to_string(),
+            kind: "file path",
+            source,
+        })?;
+    file_url.set_query(Some("download=true"));
+    download_file(file_url, dest, config::HF_TOKEN.read().await.clone(), force).await
+}
+
+pub async fn download_chatterbot_file(source: &str, dest: &Path, force: bool) -> Result<(), Error> {
+    const CHATTERBOT_BRANCH: &str = "main";
+    download_hf_file(
+        "ResembleAI",
+        "chatterbox-turbo-ONNX",
+        source,
+        CHATTERBOT_BRANCH,
+        dest,
+        force,
+    )
+    .await
+}
+
+pub async fn download_onnx_models(
+    models: &[impl ChatterboxOnnxFile],
+    force: bool,
+) -> Result<(), Error> {
+    let targets: Vec<_> = models
+        .iter()
+        .map(|m| {
+            let graph_source = format!(
+                "onnx/{}",
+                m.graph_file()
+                    .file_name()
+                    .expect("a filename to be present")
+                    .to_string_lossy()
+            );
+            let graph_dest = m.graph_file();
+            let weights_source = format!(
+                "onnx/{}",
+                m.weights_file()
+                    .file_name()
+                    .expect("a filename to be present")
+                    .to_string_lossy()
+            );
+            let weights_dest = m.weights_file();
+            ((graph_source, graph_dest), (weights_source, weights_dest))
+        })
+        .flat_map(|((a, b), (c, d))| vec![(a, b), (c, d)])
+        .collect();
+
+    stream::iter(targets)
+        .map(|(source, dest)| async move { download_chatterbot_file(&source, &dest, force).await })
+        .buffer_unordered(*config::MAX_CONCURRENT_DOWNLOADS.read().await)
+        .try_collect::<()>()
+        .await;
+    Ok(())
+}

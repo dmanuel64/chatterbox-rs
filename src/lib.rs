@@ -1,18 +1,23 @@
-mod audio;
 pub mod config;
+#[cfg(feature = "download")]
+mod downloader;
+mod onnx;
 mod s3gen;
 mod t3;
-mod tokenizer;
+mod tokenizers;
 mod voice_encoder;
-#[cfg(feature = "watermark")]
-mod watermark;
 
 use ort::device::Device;
-use std::path::Path;
-pub use thiserror::Error;
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+pub use onnx::Variant;
 
 #[derive(Debug, Error)]
-pub enum Error {}
+pub enum Error {
+    #[error("An ONNX runtime error occurred: {0}")]
+    Onnx(#[source] ort::Error),
+}
 
 pub type ChatterboxError = Error;
 
