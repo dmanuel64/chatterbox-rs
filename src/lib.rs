@@ -1,6 +1,6 @@
 pub mod config;
 #[cfg(feature = "download")]
-mod downloader;
+pub mod downloader;
 mod onnx;
 mod s3gen;
 mod t3;

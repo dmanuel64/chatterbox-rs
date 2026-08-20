@@ -1,6 +1,11 @@
 use futures::{StreamExt, TryStreamExt, stream};
 use reqwest::Url;
-use std::{io, path::Path, str::FromStr, sync::LazyLock};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::LazyLock,
+};
 use thiserror::Error;
 use tokio::{fs::File, io::AsyncWriteExt};
 
@@ -18,8 +23,6 @@ pub enum Error {
         kind: &'static str,
         source: url::ParseError,
     },
-    #[error("multiple download errors occurred")]
-    Batch { errors: Vec<Self> },
 }
 
 async fn download_file(
@@ -100,7 +103,7 @@ async fn download_hf_file(
     download_file(file_url, dest, config::HF_TOKEN.read().await.clone(), force).await
 }
 
-pub async fn download_chatterbot_file(source: &str, dest: &Path, force: bool) -> Result<(), Error> {
+async fn download_chatterbot_file(source: &str, dest: &Path, force: bool) -> Result<(), Error> {
     const CHATTERBOT_BRANCH: &str = "main";
     download_hf_file(
         "ResembleAI",
@@ -113,10 +116,28 @@ pub async fn download_chatterbot_file(source: &str, dest: &Path, force: bool) ->
     .await
 }
 
-pub async fn download_onnx_models(
-    models: &[impl ChatterboxOnnxFile],
+pub struct SourceDest {
+    source: String,
+    dest: PathBuf,
     force: bool,
-) -> Result<(), Error> {
+}
+
+async fn download_chatterbot_files(targets: impl Iterator<Item = SourceDest>) -> Result<(), Error> {
+    stream::iter(targets)
+        .map(
+            |SourceDest {
+                 source,
+                 dest,
+                 force,
+             }| async move { download_chatterbot_file(&source, &dest, force).await },
+        )
+        .buffer_unordered(*config::MAX_CONCURRENT_DOWNLOADS.read().await)
+        .try_collect::<()>()
+        .await;
+    Ok(())
+}
+
+fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDest> {
     let targets: Vec<_> = models
         .iter()
         .map(|m| {
@@ -138,13 +159,85 @@ pub async fn download_onnx_models(
             let weights_dest = m.weights_file();
             ((graph_source, graph_dest), (weights_source, weights_dest))
         })
-        .flat_map(|((a, b), (c, d))| vec![(a, b), (c, d)])
+        .flat_map(|((a, b), (c, d))| {
+            vec![
+                SourceDest {
+                    source: a,
+                    dest: b,
+                    force,
+                },
+                SourceDest {
+                    source: c,
+                    dest: d,
+                    force,
+                },
+            ]
+        })
         .collect();
+    targets
+}
 
-    stream::iter(targets)
-        .map(|(source, dest)| async move { download_chatterbot_file(&source, &dest, force).await })
-        .buffer_unordered(*config::MAX_CONCURRENT_DOWNLOADS.read().await)
-        .try_collect::<()>()
-        .await;
-    Ok(())
+pub async fn download_onnx_models(
+    models: &[impl ChatterboxOnnxFile],
+    force: bool,
+) -> Result<(), Error> {
+    let targets = onnx_targets(models, force);
+    download_chatterbot_files(targets.into_iter()).await
+}
+
+async fn tokenizer_target(force: bool) -> SourceDest {
+    SourceDest {
+        source: "tokenizer.json".to_string(),
+        dest: config::TOKENIZER_PATH.read().await.clone(),
+        force,
+    }
+}
+
+pub async fn download_tokenizer(force: bool) -> Result<(), Error> {
+    let targets = [tokenizer_target(force).await];
+    download_chatterbot_files(targets.into_iter()).await
+}
+
+#[cfg(feature = "read-model-constants")]
+async fn generation_config_target(force: bool) -> SourceDest {
+    SourceDest {
+        source: "generation_config.json".to_string(),
+        dest: config::GENERATION_CONFIG_PATH.read().await.clone(),
+        force,
+    }
+}
+
+#[cfg(feature = "read-model-constants")]
+pub async fn download_generation_config(force: bool) -> Result<(), Error> {
+    let targets = [generation_config_target(force).await];
+    download_chatterbot_files(targets.into_iter()).await
+}
+
+#[cfg(feature = "read-model-constants")]
+async fn preprocessor_config_target(force: bool) -> SourceDest {
+    SourceDest {
+        source: "preprocessor_config.json".to_string(),
+        dest: config::PREPROCESSOR_CONFIG_PATH.read().await.clone(),
+        force,
+    }
+}
+
+#[cfg(feature = "read-model-constants")]
+pub async fn download_preprocessor_config(force: bool) -> Result<(), Error> {
+    let targets = [preprocessor_config_target(force).await];
+    download_chatterbot_files(targets.into_iter()).await
+}
+
+pub async fn download_missing(models: &[impl ChatterboxOnnxFile]) -> Result<(), Error> {
+    let mut targets: Vec<_> = onnx_targets(models, false);
+    targets.push(tokenizer_target(false).await);
+    #[cfg(feature = "read-model-constants")]
+    {
+        targets.push(generation_config_target(false).await);
+    }
+    #[cfg(feature = "read-model-constants")]
+    {
+        targets.push(preprocessor_config_target(false).await);
+    }
+    download_chatterbot_files(targets.into_iter()).await
 }
