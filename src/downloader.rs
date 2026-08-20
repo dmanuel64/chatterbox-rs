@@ -133,47 +133,39 @@ async fn download_chatterbot_files(targets: impl Iterator<Item = SourceDest>) ->
         )
         .buffer_unordered(*config::MAX_CONCURRENT_DOWNLOADS.read().await)
         .try_collect::<()>()
-        .await;
-    Ok(())
+        .await
 }
 
-fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDest> {
-    let targets: Vec<_> = models
-        .iter()
-        .map(|m| {
-            let graph_source = format!(
-                "onnx/{}",
-                m.graph_file()
-                    .file_name()
-                    .expect("a filename to be present")
-                    .to_string_lossy()
-            );
-            let graph_dest = m.graph_file();
-            let weights_source = format!(
-                "onnx/{}",
-                m.weights_file()
-                    .file_name()
-                    .expect("a filename to be present")
-                    .to_string_lossy()
-            );
-            let weights_dest = m.weights_file();
-            ((graph_source, graph_dest), (weights_source, weights_dest))
-        })
-        .flat_map(|((a, b), (c, d))| {
-            vec![
-                SourceDest {
-                    source: a,
-                    dest: b,
-                    force,
-                },
-                SourceDest {
-                    source: c,
-                    dest: d,
-                    force,
-                },
-            ]
-        })
-        .collect();
+async fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDest> {
+    let mut targets = Vec::with_capacity(models.len() * 2);
+    for m in models {
+        let graph_dest = m.graph_file().await;
+        let graph_source = format!(
+            "onnx/{}",
+            graph_dest
+                .file_name()
+                .expect("a filename to be present")
+                .to_string_lossy()
+        );
+        let weights_dest = m.weights_file().await;
+        let weights_source = format!(
+            "onnx/{}",
+            weights_dest
+                .file_name()
+                .expect("a filename to be present")
+                .to_string_lossy()
+        );
+        targets.push(SourceDest {
+            source: graph_source,
+            dest: graph_dest,
+            force,
+        });
+        targets.push(SourceDest {
+            source: weights_source,
+            dest: weights_dest,
+            force,
+        });
+    }
     targets
 }
 
@@ -181,7 +173,7 @@ pub async fn download_onnx_models(
     models: &[impl ChatterboxOnnxFile],
     force: bool,
 ) -> Result<(), Error> {
-    let targets = onnx_targets(models, force);
+    let targets = onnx_targets(models, force).await;
     download_chatterbot_files(targets.into_iter()).await
 }
 
@@ -229,7 +221,7 @@ pub async fn download_preprocessor_config(force: bool) -> Result<(), Error> {
 }
 
 pub async fn download_missing(models: &[impl ChatterboxOnnxFile]) -> Result<(), Error> {
-    let mut targets: Vec<_> = onnx_targets(models, false);
+    let mut targets: Vec<_> = onnx_targets(models, false).await;
     targets.push(tokenizer_target(false).await);
     #[cfg(feature = "read-model-constants")]
     {

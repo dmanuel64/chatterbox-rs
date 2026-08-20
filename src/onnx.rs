@@ -35,13 +35,13 @@ pub trait ChatterboxOnnxFile {
         )
     }
 
-    fn graph_file(&self) -> PathBuf {
-        let onnx_dir = config::ONNX_DIR.blocking_read();
+    async fn graph_file(&self) -> PathBuf {
+        let onnx_dir = config::ONNX_DIR.read().await;
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx"))
     }
 
-    fn weights_file(&self) -> PathBuf {
-        let onnx_dir = config::ONNX_DIR.blocking_read();
+    async fn weights_file(&self) -> PathBuf {
+        let onnx_dir = config::ONNX_DIR.read().await;
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx_data"))
     }
 }
