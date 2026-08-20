@@ -1,6 +1,5 @@
 mod audio;
 pub mod config;
-pub mod errors;
 mod s3gen;
 mod t3;
 mod tokenizer;
@@ -8,10 +7,14 @@ mod voice_encoder;
 #[cfg(feature = "watermark")]
 mod watermark;
 
-pub use errors::Error as ChatterboxError;
-
 use ort::device::Device;
 use std::path::Path;
+pub use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {}
+
+pub type ChatterboxError = Error;
 
 pub struct ChatterboxTts {
     tokenizer: Tokenizer,
