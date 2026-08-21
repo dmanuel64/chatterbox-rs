@@ -110,10 +110,19 @@ async fn download_hf_file(
     download_file(file_url, dest, auth_token, force).await
 }
 
-async fn download_chatterbot_file(source: &str, dest: &Path, force: bool) -> Result<(), Error> {
+async fn download_chatterbot_file(
+    source: &str,
+    dest: &Path,
+    force: bool,
+    use_mirror: bool,
+) -> Result<(), Error> {
     const CHATTERBOT_BRANCH: &str = "main";
     download_hf_file(
-        "ResembleAI",
+        if use_mirror {
+            "dmanuel99"
+        } else {
+            "ResembleAI"
+        },
         "chatterbox-turbo-ONNX",
         source,
         CHATTERBOT_BRANCH,
@@ -129,14 +138,16 @@ pub struct SourceDest {
     force: bool,
 }
 
-async fn download_chatterbot_files(targets: &[SourceDest]) -> Result<(), Error> {
+async fn download_chatterbot_files(targets: &[SourceDest], use_mirror: bool) -> Result<(), Error> {
     stream::iter(targets)
         .map(
             |SourceDest {
                  source,
                  dest,
                  force,
-             }| async move { download_chatterbot_file(&source, &dest, *force).await },
+             }| async move {
+                download_chatterbot_file(&source, &dest, *force, use_mirror).await
+            },
         )
         .buffer_unordered(
             *config::MAX_CONCURRENT_DOWNLOADS
@@ -180,12 +191,16 @@ fn onnx_targets(files: &[Box<dyn Model>], force: bool) -> Vec<SourceDest> {
     targets
 }
 
-async fn download_onnx_files(files: &[Box<dyn Model>], force: bool) -> Result<(), Error> {
+async fn download_onnx_files(
+    files: &[Box<dyn Model>],
+    force: bool,
+    use_mirror: bool,
+) -> Result<(), Error> {
     let targets = onnx_targets(files, force);
-    download_chatterbot_files(&targets).await
+    download_chatterbot_files(&targets, use_mirror).await
 }
 
-pub async fn download_model(variant: Variant, force: bool) -> Result<ChatterboxTurbo, Error> {
+pub async fn download_model(variant: Variant, force: bool, use_mirror: bool) -> Result<(), Error> {
     let encoder = SpeechEncoder { variant };
     let embedder = TokenEmbedder { variant };
     let model = LanguageModel { variant };
@@ -198,9 +213,10 @@ pub async fn download_model(variant: Variant, force: bool) -> Result<ChatterboxT
             Box::new(decoder.clone()),
         ],
         force,
+        use_mirror,
     )
     .await?;
-    Ok(ChatterboxTurbo::new(encoder, embedder, model, decoder, 0))
+    Ok(())
 }
 
 fn tokenizer_target(force: bool) -> SourceDest {
@@ -214,12 +230,12 @@ fn tokenizer_target(force: bool) -> SourceDest {
     }
 }
 
-pub async fn download_tokenizer(force: bool) -> Result<(), Error> {
+pub async fn download_tokenizer(force: bool, use_mirror: bool) -> Result<(), Error> {
     let targets = [tokenizer_target(force)];
-    download_chatterbot_files(&targets).await
+    download_chatterbot_files(&targets, use_mirror).await
 }
 
-pub async fn download_missing(variant: Variant) -> Result<ChatterboxTurbo, Error> {
+pub async fn download_missing(variant: Variant, use_mirror: bool) -> Result<(), Error> {
     let encoder = SpeechEncoder { variant };
     let embedder = TokenEmbedder { variant };
     let model = LanguageModel { variant };
@@ -234,6 +250,6 @@ pub async fn download_missing(variant: Variant) -> Result<ChatterboxTurbo, Error
         false,
     );
     targets.push(tokenizer_target(false));
-    download_chatterbot_files(&targets).await?;
-    Ok(ChatterboxTurbo::new(encoder, embedder, model, decoder, 0))
+    download_chatterbot_files(&targets, use_mirror).await?;
+    Ok(())
 }
