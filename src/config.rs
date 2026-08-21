@@ -15,7 +15,8 @@ static DATA_DIR: LazyLock<&Path> = LazyLock::new(|| DIRS.data_local_dir());
 
 pub static ONNX_DIR: LazyLock<RwLock<PathBuf>> =
     LazyLock::new(|| RwLock::new(DATA_DIR.join("onnx")));
-pub static TOKENIZER_DIR: LazyLock<RwLock<&Path>> = LazyLock::new(|| RwLock::new(&DATA_DIR));
+pub static TOKENIZER_PATH: LazyLock<RwLock<PathBuf>> =
+    LazyLock::new(|| RwLock::new(DATA_DIR.join("tokenizer.json")));
 
 #[cfg(feature = "download")]
 pub static MAX_CONCURRENT_DOWNLOADS: LazyLock<RwLock<usize>> = LazyLock::new(|| RwLock::new(4));

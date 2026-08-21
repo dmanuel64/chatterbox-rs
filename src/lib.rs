@@ -3,7 +3,6 @@ pub mod config;
 #[cfg(feature = "download")]
 pub mod downloader;
 mod models;
-mod tokenizer;
 
 pub type ChatterboxError = chatterbox_turbo::Error;
 

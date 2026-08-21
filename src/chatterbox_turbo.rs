@@ -1,5 +1,5 @@
 use crate::{
-    Variant,
+    Variant, config,
     models::{self, ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
 };
 use ndarray::{concatenate, prelude::*};
@@ -20,6 +20,8 @@ pub enum Error {
     OnnxGeneric(#[from] ort::Error),
     #[error("An ONNX runtime error occurred: {0}")]
     OnnxSession(#[from] ort::Error<SessionBuilder>),
+    #[error("A tokenizer error occurred: {0}")]
+    Tokenizer(#[from] tokenizers::Error),
 }
 
 const SAMPLE_RATE: u32 = 24000;
@@ -38,6 +40,7 @@ pub struct ChatterboxTurbo {
     token_embedder_session: Session,
     language_model_session: Session,
     conditional_decoder_session: Session,
+    tokenizer: tokenizers::Tokenizer,
 }
 
 pub struct GenerateOptions {
@@ -94,6 +97,12 @@ impl ChatterboxTurbo {
         let conditional_decoder_session = Session::builder()?
             .with_auto_device(device_policy)?
             .commit_from_file(conditional_decoder.graph_file())?;
+        let tokenizer = tokenizers::Tokenizer::from_file(
+            config::TOKENIZER_PATH
+                .read()
+                .expect("TOKENIZER_PATH lock poisoned")
+                .clone(),
+        )?;
         Ok(Self {
             speech_encoder,
             token_embedder,
@@ -103,6 +112,7 @@ impl ChatterboxTurbo {
             token_embedder_session,
             language_model_session,
             conditional_decoder_session,
+            tokenizer,
         })
     }
 
@@ -138,8 +148,13 @@ impl ChatterboxTurbo {
         todo!()
     }
 
-    fn prepare_text_input(&self) -> ArrayD<i64> {
-        todo!()
+    fn prepare_text_input(&self, text: &str) -> Result<ArrayD<i64>, Error> {
+        let encoding = self.tokenizer.encode(text, true)?;
+        let ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+        let seq_len = ids.len();
+        Ok(Array2::from_shape_vec((1, seq_len), ids)
+            .expect("ids length should match shape")
+            .into_dyn())
     }
 
     fn decode_audio(
@@ -176,7 +191,7 @@ impl ChatterboxTurbo {
         options: GenerateOptions,
     ) -> Result<Vec<i64>, Error> {
         let audio_values = self.prepare_audio_input();
-        let mut input_ids = self.prepare_text_input();
+        let mut input_ids = self.prepare_text_input(text)?;
 
         let repetition_penalty_processor = RepetitionPenaltyLogitsProcessor {
             penalty: options.repetition_penalty,
