@@ -134,15 +134,30 @@ impl ChatterboxTurbo {
         )
     }
 
-    fn prepare_audio_input(&self) -> ArrayD<f32> {}
+    fn prepare_audio_input(&self) -> ArrayD<f32> {
+        todo!()
+    }
 
-    fn prepare_text_input(&self) -> ArrayD<i64> {}
+    fn prepare_text_input(&self) -> ArrayD<i64> {
+        todo!()
+    }
 
-    fn decode_audio(&self, generate_tokens: ArrayD<i64>) -> Result<ArrayD<i64>, Error> {
+    fn decode_audio(
+        &mut self,
+        prompt_token: i64,
+        generate_tokens: ArrayD<i64>,
+        speaker_embeddings: ArrayD<i64>,
+        speaker_features: ArrayD<i64>,
+    ) -> Result<ArrayD<i64>, Error> {
         let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
         let silence_tokens =
             Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
-        let speech_tokens = concatenate![Axis(1), prompt_token, speech_tokens, silence_tokens];
+        let speech_tokens = concatenate![
+            Axis(1),
+            array![prompt_token].into_dyn(),
+            speech_tokens,
+            silence_tokens
+        ];
 
         let output = self.conditional_decoder_session.run(ort::inputs![
             "speech_tokens" => Tensor::from_array(speech_tokens)?,
@@ -151,7 +166,7 @@ impl ChatterboxTurbo {
         ])?;
         // TODO: they have it as squeeze(axis=0)
         let wav = output[0].try_extract_array()?.squeeze();
-        Ok(wav)
+        Ok(wav.to_owned())
     }
 
     pub fn generate(
@@ -168,9 +183,14 @@ impl ChatterboxTurbo {
         };
         let mut generate_tokens = array![[START_SPEECH_TOKEN]].into_dyn();
         let mut attention_mask = Array2::default(Ix2::default());
+
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
         let mut batch_size = 0;
         let mut past_key_values: Vec<(String, Array4<f32>)> = Vec::new();
+        let mut speaker_embeddings: ArrayD<i64> = Array::default(Ix1::default()).into_dyn();
+        let mut speaker_features: ArrayD<i64> = Array::default(Ix1::default()).into_dyn();
+        let mut prompt_token: i64 = i64::default();
+
         for tokens_generated in 0..options.max_new_tokens.get() {
             let token_embedder_outputs = self.token_embedder_session.run(ort::inputs![
                 "input_ids" => Tensor::from_array(input_ids.clone())?
@@ -183,10 +203,10 @@ impl ChatterboxTurbo {
                     ort::inputs!["audio_values" => Tensor::from_array(audio_values.clone())?];
                 let speech_encoder_outputs =
                     self.speech_encoder_session.run(ort_speech_encoder_input)?;
-                let condition_embeddings = speech_encoder_outputs[0].try_extract_array::<f32>()?;
-                let prompt_token = &speech_encoder_outputs[1];
-                let speaker_embeddings = &speech_encoder_outputs[2];
-                let speaker_features = &speech_encoder_outputs[3];
+                let condition_embeddings = speech_encoder_outputs[0].try_extract_array()?;
+                prompt_token = speech_encoder_outputs[1].try_extract_scalar()?;
+                speaker_embeddings = speech_encoder_outputs[2].try_extract_array()?.to_owned();
+                speaker_features = speech_encoder_outputs[3].try_extract_array()?.to_owned();
                 input_embeds = concatenate![Axis(1), condition_embeddings, input_embeds];
 
                 // Initialize cache and LLM inputs
@@ -206,19 +226,20 @@ impl ChatterboxTurbo {
                         Array4::<f32>::zeros(Ix4(batch_size, NUM_KV_HEADS, 0, HEAD_DIM)),
                     ));
                 }
-                attention_mask = Array2::<i64>::ones(Ix2(batch_size, seq_len));
-                position_ids = Array1::from_iter(0..seq_len as i64)
+                attention_mask = Array::ones(Ix2(batch_size, seq_len));
+                position_ids = Array::from_iter(0..seq_len as i64)
                     .broadcast((batch_size, seq_len))
                     .expect("broadcast should not fail")
                     .to_owned();
             }
             let mut language_model_inputs = ort::inputs![
                 "input_embeds" => Tensor::from_array(input_embeds)?,
-                "attention_mask" => Tensor::from_array(attention_mask)?,
-                "position_id" => Tensor::from_array(position_ids)?,
+                "attention_mask" => Tensor::from_array(attention_mask.clone())?,
+                "position_id" => Tensor::from_array(position_ids.clone())?,
             ];
             for (name, kv) in &past_key_values {
-                language_model_inputs.push((name.as_str().into(), Tensor::from_array(kv.clone())?.into()));
+                language_model_inputs
+                    .push((name.as_str().into(), Tensor::from_array(kv.clone())?.into()));
             }
             let language_model_outputs = self.language_model_session.run(language_model_inputs)?;
             let logits = &language_model_outputs[0].try_extract_array()?;
@@ -234,8 +255,9 @@ impl ChatterboxTurbo {
                 })
                 .collect::<Result<_, _>>()?;
 
-            let logits = logits.slice(s![.., -1, ..]);
-            let next_token_logits = repetition_penalty_processor.process(generate_tokens, logits);
+            let logits = logits.slice(s![.., -1, ..]).into_dyn();
+            let next_token_logits =
+                repetition_penalty_processor.process(generate_tokens.clone(), logits.to_owned());
 
             let last_axis = Axis(next_token_logits.ndim() - 1);
             input_ids = next_token_logits
@@ -263,8 +285,13 @@ impl ChatterboxTurbo {
                 *kv = new_kv;
             }
         }
-        self.decode_audio(generate_tokens)
-            .map(|a| a.into_iter().collect())
+        self.decode_audio(
+            prompt_token,
+            generate_tokens,
+            speaker_embeddings,
+            speaker_features,
+        )
+        .map(|a| a.into_iter().collect())
     }
 
     pub fn generate_with_ref_file(
@@ -285,8 +312,7 @@ impl ChatterboxTurbo {
         options: GenerateOptions,
     ) -> Result<(), Error> {
         let generated_bytes = self.generate(text, reference_audio_bytes, options)?;
-        fs::write(output_path, generated_bytes)?;
-        Ok(())
+        todo!()
     }
 
     pub fn generate_with_files(
