@@ -145,7 +145,7 @@ impl ChatterboxTurbo {
     fn decode_audio(
         &mut self,
         prompt_token: i64,
-        generate_tokens: ArrayD<i64>,
+        generate_tokens: &ArrayRefD<i64>,
         speaker_embeddings: ArrayD<i64>,
         speaker_features: ArrayD<i64>,
     ) -> Result<ArrayD<i64>, Error> {
@@ -187,9 +187,9 @@ impl ChatterboxTurbo {
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
         let mut batch_size = 0;
         let mut past_key_values: Vec<(String, Array4<f32>)> = Vec::new();
-        let mut speaker_embeddings: ArrayD<i64> = Array::default(Ix1::default()).into_dyn();
-        let mut speaker_features: ArrayD<i64> = Array::default(Ix1::default()).into_dyn();
-        let mut prompt_token: i64 = i64::default();
+        let mut speaker_embeddings: Option<ArrayD<i64>> = None;
+        let mut speaker_features: Option<ArrayD<i64>> = None;
+        let mut prompt_token: Option<i64> = None;
 
         for tokens_generated in 0..options.max_new_tokens.get() {
             let token_embedder_outputs = self.token_embedder_session.run(ort::inputs![
@@ -204,9 +204,10 @@ impl ChatterboxTurbo {
                 let speech_encoder_outputs =
                     self.speech_encoder_session.run(ort_speech_encoder_input)?;
                 let condition_embeddings = speech_encoder_outputs[0].try_extract_array()?;
-                prompt_token = speech_encoder_outputs[1].try_extract_scalar()?;
-                speaker_embeddings = speech_encoder_outputs[2].try_extract_array()?.to_owned();
-                speaker_features = speech_encoder_outputs[3].try_extract_array()?.to_owned();
+                prompt_token = Some(speech_encoder_outputs[1].try_extract_scalar()?);
+                speaker_embeddings =
+                    Some(speech_encoder_outputs[2].try_extract_array()?.to_owned());
+                speaker_features = Some(speech_encoder_outputs[3].try_extract_array()?.to_owned());
                 input_embeds = concatenate![Axis(1), condition_embeddings, input_embeds];
 
                 // Initialize cache and LLM inputs
@@ -257,7 +258,7 @@ impl ChatterboxTurbo {
 
             let logits = logits.slice(s![.., -1, ..]).into_dyn();
             let next_token_logits =
-                repetition_penalty_processor.process(generate_tokens.clone(), logits.to_owned());
+                repetition_penalty_processor.process(&generate_tokens, logits.to_owned());
 
             let last_axis = Axis(next_token_logits.ndim() - 1);
             input_ids = next_token_logits
@@ -286,10 +287,10 @@ impl ChatterboxTurbo {
             }
         }
         self.decode_audio(
-            prompt_token,
-            generate_tokens,
-            speaker_embeddings,
-            speaker_features,
+            prompt_token.expect("prompt token to be cached"),
+            &generate_tokens,
+            speaker_embeddings.expect("embeddings to be cached"),
+            speaker_features.expect("features to be cached"),
         )
         .map(|a| a.into_iter().collect())
     }
@@ -332,7 +333,7 @@ struct RepetitionPenaltyLogitsProcessor {
 }
 
 impl RepetitionPenaltyLogitsProcessor {
-    pub fn process(&self, input_ids: ArrayD<i64>, scores: ArrayD<f32>) -> ArrayD<f32> {
+    pub fn process(&self, input_ids: &ArrayRefD<i64>, scores: ArrayD<f32>) -> ArrayD<f32> {
         let penalty: f32 = self.penalty.into();
         let mut scores_processed = scores.clone();
 
