@@ -222,7 +222,7 @@ pub async fn download_model(variant: Variant, force: bool, use_mirror: bool) -> 
 fn tokenizer_target(force: bool) -> SourceDest {
     SourceDest {
         source: "tokenizer.json".to_string(),
-        dest: config::TOKENIZER_PATH
+        dest: config::TOKENIZER_DIR
             .read()
             .expect("TOKENIZER_PATH lock poisoned")
             .clone(),
