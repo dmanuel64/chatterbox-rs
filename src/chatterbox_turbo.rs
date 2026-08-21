@@ -82,6 +82,28 @@ impl Default for LoadOptions {
 }
 
 impl ChatterboxTurbo {
+    pub const END_OF_TEXT_TOKEN: &str = "<|endoftext|>";
+
+    pub const ANGRY_TAG: &str = "[angry]";
+    pub const FEAR_TAG: &str = "[fear]";
+    pub const SURPRISED_TAG: &str = "[surprised]";
+    pub const WHISPERING_TAG: &str = "[whispering]";
+    pub const ADVERTISEMENT_TAG: &str = "[advertisement]";
+    pub const DRAMATIC_TAG: &str = "[dramatic]";
+    pub const NARRATION_TAG: &str = "[narration]";
+    pub const CRYING_TAG: &str = "[crying]";
+    pub const HAPPY_TAG: &str = "[happy]";
+    pub const SARCASTIC_TAG: &str = "[sarcastic]";
+    pub const CLEAR_THROAT_TAG: &str = "[clear throat]";
+    pub const SIGH_TAG: &str = "[sigh]";
+    pub const SHUSH_TAG: &str = "[shush]";
+    pub const COUGH_TAG: &str = "[cough]";
+    pub const GROAN_TAG: &str = "[groan]";
+    pub const SNIFF_TAG: &str = "[sniff]";
+    pub const GASP_TAG: &str = "[gasp]";
+    pub const CHUCKLE_TAG: &str = "[chuckle]";
+    pub const LAUGH_TAG: &str = "[laugh]";
+
     fn new(
         speech_encoder: SpeechEncoder,
         token_embedder: TokenEmbedder,

@@ -10,6 +10,7 @@ words:
   - cuda
   - dmanuel
   - Embedder
+  - endoftext
   - isomp
   - Logits
   - ndarray
