@@ -25,10 +25,3 @@ pub static SHOW_DOWNLOAD_PROGRESS: LazyLock<RwLock<bool>> = LazyLock::new(|| RwL
 #[cfg(feature = "download")]
 pub static HF_TOKEN: LazyLock<RwLock<Option<String>>> =
     LazyLock::new(|| RwLock::new(env::var("HF_TOKEN").ok()));
-
-pub static SAMPLE_RATE: LazyLock<RwLock<u32>> = LazyLock::new(|| RwLock::new(24000));
-pub static START_SPEECH_TOKEN: LazyLock<RwLock<u32>> = LazyLock::new(|| RwLock::new(6561));
-pub static STOP_SPEECH_TOKEN: LazyLock<RwLock<u32>> = LazyLock::new(|| RwLock::new(6562));
-pub static SILENCE_TOKEN: LazyLock<RwLock<u32>> = LazyLock::new(|| RwLock::new(4299));
-pub static NUM_KV_HEADS: LazyLock<RwLock<usize>> = LazyLock::new(|| RwLock::new(16));
-pub static HEAD_DIM: LazyLock<RwLock<u32>> = LazyLock::new(|| RwLock::new(64));

@@ -10,8 +10,8 @@ use thiserror::Error;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use crate::{
-    ChatterboxTts, Variant, config,
-    onnx::{ChatterboxOnnxFile, ConditionalDecoder, LanguageModel, SpeechEncoder, TokenEmbedder},
+    ChatterboxTurbo, Variant, config,
+    models::{ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
 };
 
 #[derive(Debug, Error)]
@@ -147,7 +147,7 @@ async fn download_chatterbot_files(targets: &[SourceDest]) -> Result<(), Error> 
         .await
 }
 
-fn onnx_targets(files: &[Box<dyn ChatterboxOnnxFile>], force: bool) -> Vec<SourceDest> {
+fn onnx_targets(files: &[Box<dyn Model>], force: bool) -> Vec<SourceDest> {
     let mut targets = Vec::with_capacity(files.len() * 2);
     for m in files {
         let graph_dest = m.graph_file();
@@ -180,15 +180,12 @@ fn onnx_targets(files: &[Box<dyn ChatterboxOnnxFile>], force: bool) -> Vec<Sourc
     targets
 }
 
-async fn download_onnx_files(
-    files: &[Box<dyn ChatterboxOnnxFile>],
-    force: bool,
-) -> Result<(), Error> {
+async fn download_onnx_files(files: &[Box<dyn Model>], force: bool) -> Result<(), Error> {
     let targets = onnx_targets(files, force);
     download_chatterbot_files(&targets).await
 }
 
-pub async fn download_model(variant: Variant, force: bool) -> Result<ChatterboxTts, Error> {
+pub async fn download_model(variant: Variant, force: bool) -> Result<ChatterboxTurbo, Error> {
     let encoder = SpeechEncoder { variant };
     let embedder = TokenEmbedder { variant };
     let model = LanguageModel { variant };
@@ -203,7 +200,7 @@ pub async fn download_model(variant: Variant, force: bool) -> Result<ChatterboxT
         force,
     )
     .await?;
-    Ok(ChatterboxTts::new(encoder, embedder, model, decoder, 0))
+    Ok(ChatterboxTurbo::new(encoder, embedder, model, decoder, 0))
 }
 
 fn tokenizer_target(force: bool) -> SourceDest {
@@ -222,7 +219,7 @@ pub async fn download_tokenizer(force: bool) -> Result<(), Error> {
     download_chatterbot_files(&targets).await
 }
 
-pub async fn download_missing(variant: Variant) -> Result<ChatterboxTts, Error> {
+pub async fn download_missing(variant: Variant) -> Result<ChatterboxTurbo, Error> {
     let encoder = SpeechEncoder { variant };
     let embedder = TokenEmbedder { variant };
     let model = LanguageModel { variant };
@@ -238,5 +235,5 @@ pub async fn download_missing(variant: Variant) -> Result<ChatterboxTts, Error> 
     );
     targets.push(tokenizer_target(false));
     download_chatterbot_files(&targets).await?;
-    Ok(ChatterboxTts::new(encoder, embedder, model, decoder, 0))
+    Ok(ChatterboxTurbo::new(encoder, embedder, model, decoder, 0))
 }

@@ -1,13 +1,12 @@
+mod chatterbox_turbo;
 pub mod config;
 #[cfg(feature = "download")]
 pub mod downloader;
-mod model;
-mod onnx;
-mod s3gen;
-mod t3;
+mod models;
 mod tokenizers;
-mod voice_encoder;
 
-pub use model::ChatterboxTts;
-pub use onnx::Variant;
-pub type ChatterboxError = model::Error;
+pub type ChatterboxError = chatterbox_turbo::Error;
+
+pub use chatterbox_turbo::ChatterboxTurbo;
+pub use models::Variant;
+pub use ort::session::builder::AutoDevicePolicy;

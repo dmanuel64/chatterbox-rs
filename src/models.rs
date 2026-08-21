@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use crate::config;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Variant {
+    #[default]
     Fp32,
     Fp16,
     Int8,
@@ -23,7 +24,7 @@ impl Variant {
     }
 }
 
-pub trait ChatterboxOnnxFile {
+pub trait Model {
     fn filename_prefix(&self) -> &'static str;
     fn variant(&self) -> Variant;
 
@@ -51,7 +52,7 @@ pub struct SpeechEncoder {
     pub variant: Variant,
 }
 
-impl ChatterboxOnnxFile for SpeechEncoder {
+impl Model for SpeechEncoder {
     fn filename_prefix(&self) -> &'static str {
         "speech_encoder"
     }
@@ -66,7 +67,7 @@ pub struct TokenEmbedder {
     pub variant: Variant,
 }
 
-impl ChatterboxOnnxFile for TokenEmbedder {
+impl Model for TokenEmbedder {
     fn filename_prefix(&self) -> &'static str {
         "embed_tokens"
     }
@@ -81,7 +82,7 @@ pub struct LanguageModel {
     pub variant: Variant,
 }
 
-impl ChatterboxOnnxFile for LanguageModel {
+impl Model for LanguageModel {
     fn filename_prefix(&self) -> &'static str {
         "language_model"
     }
@@ -96,7 +97,7 @@ pub struct ConditionalDecoder {
     pub variant: Variant,
 }
 
-impl ChatterboxOnnxFile for ConditionalDecoder {
+impl Model for ConditionalDecoder {
     fn filename_prefix(&self) -> &'static str {
         "conditional_decoder"
     }

@@ -10,6 +10,7 @@ words:
   - cuda
   - Embedder
   - isomp
+  - Logits
   - ndarray
   - Onnx
   - reqwest

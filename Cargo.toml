@@ -16,6 +16,7 @@ symphonia = "0.6"
 thiserror = "2"
 tokenizers = "0.23"
 tokio = { version = "1", features = ["fs", "io-util"], optional = true }
+typed_floats = "1"
 url = { version = "2", optional = true }
 
 [features]
