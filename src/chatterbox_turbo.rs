@@ -139,9 +139,19 @@ impl ChatterboxTurbo {
 
     fn prepare_text_input(&self) -> ArrayD<i64> {}
 
-    fn decode_audio(&self, generate_tokens: ArrayD<i64>) -> ArrayD<i64> {
-        let speech_tokens = s![.., 1, -1];
-        let silence_tokens = ArrayD::<i64>::from_elem((speech_tokens.shape()[0], 3), SILENCE_TOKEN);
+    fn decode_audio(&self, generate_tokens: ArrayD<i64>) -> Result<ArrayD<i64>, Error> {
+        let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
+        let silence_tokens =
+            Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
+        let speech_tokens = concatenate![Axis(1), prompt_token, speech_tokens, silence_tokens];
+
+        let output = self.conditional_decoder_session.run(ort::inputs![
+            "speech_tokens" => Tensor::from_array(speech_tokens)?,
+            "speaker_embeddings" => Tensor::from_array(speaker_embeddings)?,
+            "speaker_features" => Tensor::from_array(speaker_features)?
+        ])?;
+        let wav = output[0].try_extract_array()?.squeeze();
+        Ok(wav)
     }
 
     pub fn generate(
@@ -149,54 +159,106 @@ impl ChatterboxTurbo {
         text: &str,
         reference_audio_path: impl AsRef<Path>,
         options: GenerateOptions,
-    ) -> Result<Vec<f32>, Error> {
+    ) -> Result<Vec<i64>, Error> {
         let audio_values = self.prepare_audio_input();
-        let input_ids = self.prepare_text_input();
+        let mut input_ids = self.prepare_text_input();
 
         let repetition_penalty_processor = RepetitionPenaltyLogitsProcessor {
             penalty: options.repetition_penalty,
         };
-        let generate_tokens = array![[START_SPEECH_TOKEN]];
+        let mut generate_tokens = array![[START_SPEECH_TOKEN]].into_dyn();
+        let mut attention_mask = Array2::default(Ix2::default());
+        let mut position_ids: Array2<i64> = Array::default(Ix2::default());
+        let mut batch_size = 0;
         for tokens_generated in 0..options.max_new_tokens.get() {
-            let mut input_embeds = self
-                .token_embedder_session
-                .run(ort::inputs![
-                    "input_ids" => Tensor::from_array(input_ids.clone())?
-                ])
-                .expect("TODO create an error for this")
-                .get("input_embeds")
-                .expect("TODO create an error for this")
-                .try_extract_array()
-                .expect("TODO make an error for this");
+            let token_embedder_outputs = self.token_embedder_session.run(ort::inputs![
+                "input_ids" => Tensor::from_array(input_ids.clone())?
+            ])?;
+            let mut input_embeds: ArrayD<f32> =
+                token_embedder_outputs[0].try_extract_array()?.to_owned();
 
             if tokens_generated == 0 {
                 let ort_speech_encoder_input =
                     ort::inputs!["audio_values" => Tensor::from_array(audio_values.clone())?];
-                let outputs = self.speech_encoder_session.run(ort_speech_encoder_input)?;
-                let condition_embeddings = outputs
-                    .get("cond_emb")
-                    .expect("TODO create an error for this")
-                    .try_extract_array()
-                    .expect("TODO make an error for this");
-                let prompt_token = outputs
-                    .get("prompt_token")
-                    .expect("TODO create an error for this");
-                let speaker_embeddings = outputs
-                    .get("speaker_embeddings")
-                    .expect("TODO create an error for this");
-                let speaker_features = outputs
-                    .get("speaker_features")
-                    .expect("TODO create an error for this");
+                let speech_encoder_outputs =
+                    self.speech_encoder_session.run(ort_speech_encoder_input)?;
+                let condition_embeddings = speech_encoder_outputs[0].try_extract_array::<f32>()?;
+                let prompt_token = &speech_encoder_outputs[1];
+                let speaker_embeddings = &speech_encoder_outputs[2];
+                let speaker_features = &speech_encoder_outputs[3];
                 input_embeds = concatenate![Axis(1), condition_embeddings, input_embeds];
 
                 // Initialize cache and LLM inputs
-                let [batch_size, seq_len, ..] = input_embeds.shape();
-                let past_key_values = None;
+                let &[b, seq_len, ..] = input_embeds.shape() else {
+                    unreachable!("input_embeds should have at least 2 dimensions")
+                };
+                batch_size = b;
+                let mut past_key_values = Vec::new();
+                for input in self
+                    .language_model_session
+                    .inputs()
+                    .iter()
+                    .filter(|i| i.name() == "past_key_values")
+                {
+                    // TODO: dtype=np.float16 if i.type == 'tensor(float16)' else np.float32)
+                    past_key_values.push((
+                        input.name().into(),
+                        Tensor::from_array(Array4::<f32>::zeros(Ix4(
+                            batch_size,
+                            NUM_KV_HEADS,
+                            0,
+                            HEAD_DIM,
+                        )))?
+                        .into(),
+                    ));
+                }
+                attention_mask = Array2::<i64>::ones(Ix2(batch_size, seq_len));
+                position_ids = Array1::from_iter(0..seq_len as i64)
+                    .broadcast((batch_size, seq_len))
+                    .expect("broadcast should not fail")
+                    .to_owned();
+            }
+            let mut language_model_inputs = ort::inputs![
+                "input_embeds" => Tensor::from_array(input_embeds)?,
+                "attention_mask" => Tensor::from_array(attention_mask)?,
+                "position_id" => Tensor::from_array(position_ids)?,
+            ];
+            language_model_inputs.extend(past_key_values);
+            let language_model_outputs = self.language_model_session.run(language_model_inputs)?;
+            let logits = &language_model_outputs[0].try_extract_array()?;
+            let present_key_values: Vec<_> = language_model_outputs.values().skip(1).collect();
 
-                let attention_mask = ArrayD::<i64>::ones((batch_size, seq_len));
+            let logits = logits.slice(s![.., -1, ..]);
+            let next_token_logits = repetition_penalty_processor.process(generate_tokens, logits);
+
+            let last_axis = Axis(next_token_logits.ndim() - 1);
+            input_ids = next_token_logits
+                .map_axis(last_axis, |row| {
+                    row.iter()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                        .map(|(idx, _)| idx as i64)
+                        .expect("row should not be empty")
+                })
+                .insert_axis(last_axis);
+            generate_tokens = concatenate![Axis(1), generate_tokens, input_ids];
+            if input_ids.iter().all(|&id| id == STOP_SPEECH_TOKEN) {
+                break;
+            }
+
+            // Update values for next generation loop
+            attention_mask = concatenate![
+                Axis(1),
+                attention_mask,
+                Array2::<i64>::ones(Ix2(batch_size, 1))
+            ];
+            position_ids = position_ids.slice(s![.., -1..]).to_owned() + 1;
+            for (idx, key) in past_key_values.enumerate() {
+                past_key_values[key] = present_key_values[idx];
             }
         }
-        todo!()
+        self.decode_audio(generate_tokens)
+            .map(|a| a.into_iter().collect())
     }
 }
 
@@ -205,7 +267,25 @@ struct RepetitionPenaltyLogitsProcessor {
 }
 
 impl RepetitionPenaltyLogitsProcessor {
-    pub fn pass(&self, input_ids: ArrayD<u32>, scores: ArrayD<u32>) -> ArrayD<u32> {
-        // let scores = ndarray::
+    pub fn process(&self, input_ids: ArrayD<i64>, scores: ArrayD<f32>) -> ArrayD<f32> {
+        let penalty: f32 = self.penalty.into();
+        let mut scores_processed = scores.clone();
+
+        for (orig_row, (mut proc_row, id_row)) in scores.axis_iter(Axis(0)).zip(
+            scores_processed
+                .axis_iter_mut(Axis(0))
+                .zip(input_ids.axis_iter(Axis(0))),
+        ) {
+            for &id in id_row.iter() {
+                let idx = id as usize;
+                let val = orig_row[idx];
+                proc_row[idx] = if val < 0.0 {
+                    val * penalty
+                } else {
+                    val / penalty
+                };
+            }
+        }
+        scores_processed
     }
 }
