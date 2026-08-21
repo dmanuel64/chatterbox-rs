@@ -19,7 +19,7 @@ typed_floats = "1"
 url = { version = "2", optional = true }
 
 [features]
-default = ["common-audio-formats", "download"]
+default = ["common-audio-formats"]
 
 cuda = ["ort/cuda"]
 
