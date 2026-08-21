@@ -1,17 +1,16 @@
 use crate::{
-    Variant, config,
+    Variant,
     models::{self, ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
 };
 use ndarray::{concatenate, prelude::*};
 use ort::{
-    device::Device,
     session::{
         Session,
         builder::{AutoDevicePolicy, SessionBuilder},
     },
     value::Tensor,
 };
-use std::{num::NonZero, path::Path};
+use std::{collections::HashMap, fs, num::NonZero, path::Path};
 use thiserror::Error;
 use typed_floats::tf32;
 
@@ -150,14 +149,15 @@ impl ChatterboxTurbo {
             "speaker_embeddings" => Tensor::from_array(speaker_embeddings)?,
             "speaker_features" => Tensor::from_array(speaker_features)?
         ])?;
+        // TODO: they have it as squeeze(axis=0)
         let wav = output[0].try_extract_array()?.squeeze();
         Ok(wav)
     }
 
     pub fn generate(
-        mut self,
+        &mut self,
         text: &str,
-        reference_audio_path: impl AsRef<Path>,
+        reference_audio_bytes: Vec<i64>,
         options: GenerateOptions,
     ) -> Result<Vec<i64>, Error> {
         let audio_values = self.prepare_audio_input();
@@ -170,6 +170,7 @@ impl ChatterboxTurbo {
         let mut attention_mask = Array2::default(Ix2::default());
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
         let mut batch_size = 0;
+        let mut past_key_values: Vec<(String, Array4<f32>)> = Vec::new();
         for tokens_generated in 0..options.max_new_tokens.get() {
             let token_embedder_outputs = self.token_embedder_session.run(ort::inputs![
                 "input_ids" => Tensor::from_array(input_ids.clone())?
@@ -193,7 +194,6 @@ impl ChatterboxTurbo {
                     unreachable!("input_embeds should have at least 2 dimensions")
                 };
                 batch_size = b;
-                let mut past_key_values = Vec::new();
                 for input in self
                     .language_model_session
                     .inputs()
@@ -202,14 +202,8 @@ impl ChatterboxTurbo {
                 {
                     // TODO: dtype=np.float16 if i.type == 'tensor(float16)' else np.float32)
                     past_key_values.push((
-                        input.name().into(),
-                        Tensor::from_array(Array4::<f32>::zeros(Ix4(
-                            batch_size,
-                            NUM_KV_HEADS,
-                            0,
-                            HEAD_DIM,
-                        )))?
-                        .into(),
+                        input.name().to_string(),
+                        Array4::<f32>::zeros(Ix4(batch_size, NUM_KV_HEADS, 0, HEAD_DIM)),
                     ));
                 }
                 attention_mask = Array2::<i64>::ones(Ix2(batch_size, seq_len));
@@ -223,10 +217,22 @@ impl ChatterboxTurbo {
                 "attention_mask" => Tensor::from_array(attention_mask)?,
                 "position_id" => Tensor::from_array(position_ids)?,
             ];
-            language_model_inputs.extend(past_key_values);
+            for (name, kv) in &past_key_values {
+                language_model_inputs.push((name.as_str().into(), Tensor::from_array(kv.clone())?.into()));
+            }
             let language_model_outputs = self.language_model_session.run(language_model_inputs)?;
             let logits = &language_model_outputs[0].try_extract_array()?;
-            let present_key_values: Vec<_> = language_model_outputs.values().skip(1).collect();
+            let present_key_values: Vec<Array4<f32>> = language_model_outputs
+                .values()
+                .skip(1)
+                .map(|v| {
+                    v.try_extract_array::<f32>().map(|a| {
+                        a.to_owned()
+                            .into_dimensionality::<Ix4>()
+                            .expect("KV cache tensor should be 4D")
+                    })
+                })
+                .collect::<Result<_, _>>()?;
 
             let logits = logits.slice(s![.., -1, ..]);
             let next_token_logits = repetition_penalty_processor.process(generate_tokens, logits);
@@ -253,12 +259,45 @@ impl ChatterboxTurbo {
                 Array2::<i64>::ones(Ix2(batch_size, 1))
             ];
             position_ids = position_ids.slice(s![.., -1..]).to_owned() + 1;
-            for (idx, key) in past_key_values.enumerate() {
-                past_key_values[key] = present_key_values[idx];
+            for ((_, kv), new_kv) in past_key_values.iter_mut().zip(present_key_values) {
+                *kv = new_kv;
             }
         }
         self.decode_audio(generate_tokens)
             .map(|a| a.into_iter().collect())
+    }
+
+    pub fn generate_with_ref_file(
+        &mut self,
+        text: &str,
+        reference_audio_path: impl AsRef<Path>,
+        options: GenerateOptions,
+    ) -> Result<Vec<i64>, Error> {
+        let target_audio_bytes = todo!();
+        self.generate(text, target_audio_bytes, options)
+    }
+
+    pub fn generate_with_output(
+        &mut self,
+        text: &str,
+        reference_audio_bytes: Vec<i64>,
+        output_path: impl AsRef<Path>,
+        options: GenerateOptions,
+    ) -> Result<(), Error> {
+        let generated_bytes = self.generate(text, reference_audio_bytes, options)?;
+        fs::write(output_path, generated_bytes)?;
+        Ok(())
+    }
+
+    pub fn generate_with_files(
+        &mut self,
+        text: &str,
+        reference_audio_path: impl AsRef<Path>,
+        output_path: impl AsRef<Path>,
+        options: GenerateOptions,
+    ) -> Result<(), Error> {
+        let reference_audio_bytes = todo!();
+        self.generate_with_output(text, reference_audio_bytes, output_path, options)
     }
 }
 
