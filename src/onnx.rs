@@ -46,6 +46,7 @@ pub trait ChatterboxOnnxFile {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct SpeechEncoder {
     pub variant: Variant,
 }
@@ -60,6 +61,7 @@ impl ChatterboxOnnxFile for SpeechEncoder {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TokenEmbedder {
     pub variant: Variant,
 }
@@ -74,6 +76,7 @@ impl ChatterboxOnnxFile for TokenEmbedder {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LanguageModel {
     pub variant: Variant,
 }
@@ -88,6 +91,7 @@ impl ChatterboxOnnxFile for LanguageModel {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ConditionalDecoder {
     pub variant: Variant,
 }

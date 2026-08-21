@@ -8,6 +8,7 @@ words:
   - byoo
   - chatterbot
   - cuda
+  - Embedder
   - isomp
   - ndarray
   - Onnx

@@ -12,8 +12,6 @@ ort = "2.0.0-rc.13"
 rand = "0.10"
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 rubato = "5"
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
 symphonia = "0.6"
 thiserror = "2"
 tokenizers = "0.23"
@@ -31,8 +29,6 @@ common-audio-formats = ["mp3", "mp4"]
 all-audio-formats = ["symphonia/all"]
 
 download = ["dep:reqwest", "dep:futures", "dep:url", "dep:tokio"]
-
-read-model-constants = ["dep:serde", "dep:serde_json"]
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }

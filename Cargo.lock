@@ -247,8 +247,6 @@ dependencies = [
  "rand 0.10.2",
  "reqwest",
  "rubato",
- "serde",
- "serde_json",
  "symphonia",
  "thiserror",
  "tokenizers",

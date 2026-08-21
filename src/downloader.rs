@@ -9,7 +9,10 @@ use std::{
 use thiserror::Error;
 use tokio::{fs::File, io::AsyncWriteExt};
 
-use crate::{config, onnx::ChatterboxOnnxFile};
+use crate::{
+    ChatterboxTts, Variant, config,
+    onnx::{ChatterboxOnnxFile, ConditionalDecoder, LanguageModel, SpeechEncoder, TokenEmbedder},
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -100,7 +103,10 @@ async fn download_hf_file(
             source,
         })?;
     file_url.set_query(Some("download=true"));
-    let auth_token = config::HF_TOKEN.read().expect("HF_TOKEN lock poisoned").clone();
+    let auth_token = config::HF_TOKEN
+        .read()
+        .expect("HF_TOKEN lock poisoned")
+        .clone();
     download_file(file_url, dest, auth_token, force).await
 }
 
@@ -123,14 +129,14 @@ pub struct SourceDest {
     force: bool,
 }
 
-async fn download_chatterbot_files(targets: impl Iterator<Item = SourceDest>) -> Result<(), Error> {
+async fn download_chatterbot_files(targets: &[SourceDest]) -> Result<(), Error> {
     stream::iter(targets)
         .map(
             |SourceDest {
                  source,
                  dest,
                  force,
-             }| async move { download_chatterbot_file(&source, &dest, force).await },
+             }| async move { download_chatterbot_file(&source, &dest, *force).await },
         )
         .buffer_unordered(
             *config::MAX_CONCURRENT_DOWNLOADS
@@ -141,9 +147,9 @@ async fn download_chatterbot_files(targets: impl Iterator<Item = SourceDest>) ->
         .await
 }
 
-fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDest> {
-    let mut targets = Vec::with_capacity(models.len() * 2);
-    for m in models {
+fn onnx_targets(files: &[Box<dyn ChatterboxOnnxFile>], force: bool) -> Vec<SourceDest> {
+    let mut targets = Vec::with_capacity(files.len() * 2);
+    for m in files {
         let graph_dest = m.graph_file();
         let graph_source = format!(
             "onnx/{}",
@@ -174,12 +180,30 @@ fn onnx_targets(models: &[impl ChatterboxOnnxFile], force: bool) -> Vec<SourceDe
     targets
 }
 
-pub async fn download_onnx_models(
-    models: &[impl ChatterboxOnnxFile],
+async fn download_onnx_files(
+    files: &[Box<dyn ChatterboxOnnxFile>],
     force: bool,
 ) -> Result<(), Error> {
-    let targets = onnx_targets(models, force);
-    download_chatterbot_files(targets.into_iter()).await
+    let targets = onnx_targets(files, force);
+    download_chatterbot_files(&targets).await
+}
+
+pub async fn download_model(variant: Variant, force: bool) -> Result<ChatterboxTts, Error> {
+    let encoder = SpeechEncoder { variant };
+    let embedder = TokenEmbedder { variant };
+    let model = LanguageModel { variant };
+    let decoder = ConditionalDecoder { variant };
+    download_onnx_files(
+        &[
+            Box::new(encoder.clone()),
+            Box::new(embedder.clone()),
+            Box::new(model.clone()),
+            Box::new(decoder.clone()),
+        ],
+        force,
+    )
+    .await?;
+    Ok(ChatterboxTts::new(encoder, embedder, model, decoder, 0))
 }
 
 fn tokenizer_target(force: bool) -> SourceDest {
@@ -195,55 +219,24 @@ fn tokenizer_target(force: bool) -> SourceDest {
 
 pub async fn download_tokenizer(force: bool) -> Result<(), Error> {
     let targets = [tokenizer_target(force)];
-    download_chatterbot_files(targets.into_iter()).await
+    download_chatterbot_files(&targets).await
 }
 
-#[cfg(feature = "read-model-constants")]
-fn generation_config_target(force: bool) -> SourceDest {
-    SourceDest {
-        source: "generation_config.json".to_string(),
-        dest: config::GENERATION_CONFIG_PATH
-            .read()
-            .expect("GENERATION_CONFIG_PATH lock poisoned")
-            .clone(),
-        force,
-    }
-}
-
-#[cfg(feature = "read-model-constants")]
-pub async fn download_generation_config(force: bool) -> Result<(), Error> {
-    let targets = [generation_config_target(force)];
-    download_chatterbot_files(targets.into_iter()).await
-}
-
-#[cfg(feature = "read-model-constants")]
-fn preprocessor_config_target(force: bool) -> SourceDest {
-    SourceDest {
-        source: "preprocessor_config.json".to_string(),
-        dest: config::PREPROCESSOR_CONFIG_PATH
-            .read()
-            .expect("PREPROCESSOR_CONFIG_PATH lock poisoned")
-            .clone(),
-        force,
-    }
-}
-
-#[cfg(feature = "read-model-constants")]
-pub async fn download_preprocessor_config(force: bool) -> Result<(), Error> {
-    let targets = [preprocessor_config_target(force)];
-    download_chatterbot_files(targets.into_iter()).await
-}
-
-pub async fn download_missing(models: &[impl ChatterboxOnnxFile]) -> Result<(), Error> {
-    let mut targets: Vec<_> = onnx_targets(models, false);
+pub async fn download_missing(variant: Variant) -> Result<ChatterboxTts, Error> {
+    let encoder = SpeechEncoder { variant };
+    let embedder = TokenEmbedder { variant };
+    let model = LanguageModel { variant };
+    let decoder = ConditionalDecoder { variant };
+    let mut targets: Vec<_> = onnx_targets(
+        &[
+            Box::new(encoder.clone()),
+            Box::new(embedder.clone()),
+            Box::new(model.clone()),
+            Box::new(decoder.clone()),
+        ],
+        false,
+    );
     targets.push(tokenizer_target(false));
-    #[cfg(feature = "read-model-constants")]
-    {
-        targets.push(generation_config_target(false));
-    }
-    #[cfg(feature = "read-model-constants")]
-    {
-        targets.push(preprocessor_config_target(false));
-    }
-    download_chatterbot_files(targets.into_iter()).await
+    download_chatterbot_files(&targets).await?;
+    Ok(ChatterboxTts::new(encoder, embedder, model, decoder, 0))
 }
