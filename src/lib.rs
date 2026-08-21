@@ -1,3 +1,4 @@
+mod audio;
 mod chatterbox_turbo;
 pub mod config;
 #[cfg(feature = "download")]

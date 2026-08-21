@@ -10,7 +10,7 @@ use ort::{
     },
     value::Tensor,
 };
-use std::{collections::HashMap, fs, num::NonZero, path::Path};
+use std::{fs, num::NonZero, path::Path};
 use thiserror::Error;
 use typed_floats::tf32;
 
@@ -22,6 +22,10 @@ pub enum Error {
     OnnxSession(#[from] ort::Error<SessionBuilder>),
     #[error("A tokenizer error occurred: {0}")]
     Tokenizer(#[from] tokenizers::Error),
+    #[error("An audio error occurred: {0}")]
+    Audio(#[from] crate::audio::Error),
+    #[error("An I/O error occurred: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 const SAMPLE_RATE: u32 = 24000;
@@ -144,8 +148,8 @@ impl ChatterboxTurbo {
         )
     }
 
-    fn prepare_audio_input(&self) -> ArrayD<f32> {
-        todo!()
+    fn prepare_audio_input(&self, reference_audio_bytes: Vec<u8>) -> Result<ArrayD<f32>, Error> {
+        Ok(crate::audio::load(reference_audio_bytes, SAMPLE_RATE)?)
     }
 
     fn prepare_text_input(&self, text: &str) -> Result<ArrayD<i64>, Error> {
@@ -187,10 +191,10 @@ impl ChatterboxTurbo {
     pub fn generate(
         &mut self,
         text: &str,
-        reference_audio_bytes: Vec<i64>,
+        reference_audio_bytes: Vec<u8>,
         options: GenerateOptions,
     ) -> Result<Vec<i64>, Error> {
-        let audio_values = self.prepare_audio_input();
+        let audio_values = self.prepare_audio_input(reference_audio_bytes)?;
         let mut input_ids = self.prepare_text_input(text)?;
 
         let repetition_penalty_processor = RepetitionPenaltyLogitsProcessor {
@@ -316,14 +320,14 @@ impl ChatterboxTurbo {
         reference_audio_path: impl AsRef<Path>,
         options: GenerateOptions,
     ) -> Result<Vec<i64>, Error> {
-        let target_audio_bytes = todo!();
+        let target_audio_bytes = fs::read(reference_audio_path)?;
         self.generate(text, target_audio_bytes, options)
     }
 
     pub fn generate_with_output(
         &mut self,
         text: &str,
-        reference_audio_bytes: Vec<i64>,
+        reference_audio_bytes: Vec<u8>,
         output_path: impl AsRef<Path>,
         options: GenerateOptions,
     ) -> Result<(), Error> {
@@ -338,7 +342,7 @@ impl ChatterboxTurbo {
         output_path: impl AsRef<Path>,
         options: GenerateOptions,
     ) -> Result<(), Error> {
-        let reference_audio_bytes = todo!();
+        let reference_audio_bytes = fs::read(reference_audio_path)?;
         self.generate_with_output(text, reference_audio_bytes, output_path, options)
     }
 }

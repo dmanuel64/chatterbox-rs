@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use crate::{
-    ChatterboxTurbo, Variant, config,
+    Variant, config,
     models::{ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
 };
 

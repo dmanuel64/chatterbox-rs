@@ -6,13 +6,12 @@ edition = "2024"
 [dependencies]
 directories = "6"
 futures = { version = "0.3", optional = true }
-hound = "3"
 ndarray = "0.17"
 ort = "2.0.0-rc.13"
 rand = "0.10"
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 rubato = "5"
-symphonia = "0.6"
+symphonia = { version = "0.6", features = ["wav", "pcm"] }
 thiserror = "2"
 tokenizers = "0.23"
 tokio = { version = "1", features = ["fs", "io-util"], optional = true }
