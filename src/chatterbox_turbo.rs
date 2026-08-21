@@ -10,7 +10,7 @@ use ort::{
     },
     value::Tensor,
 };
-use std::{fs, num::NonZero, path::Path};
+use std::{fmt::Display, fs, num::NonZero, path::Path};
 use thiserror::Error;
 use typed_floats::tf32;
 
@@ -83,26 +83,6 @@ impl Default for LoadOptions {
 
 impl ChatterboxTurbo {
     pub const END_OF_TEXT_TOKEN: &str = "<|endoftext|>";
-
-    pub const ANGRY_TAG: &str = "[angry]";
-    pub const FEAR_TAG: &str = "[fear]";
-    pub const SURPRISED_TAG: &str = "[surprised]";
-    pub const WHISPERING_TAG: &str = "[whispering]";
-    pub const ADVERTISEMENT_TAG: &str = "[advertisement]";
-    pub const DRAMATIC_TAG: &str = "[dramatic]";
-    pub const NARRATION_TAG: &str = "[narration]";
-    pub const CRYING_TAG: &str = "[crying]";
-    pub const HAPPY_TAG: &str = "[happy]";
-    pub const SARCASTIC_TAG: &str = "[sarcastic]";
-    pub const CLEAR_THROAT_TAG: &str = "[clear throat]";
-    pub const SIGH_TAG: &str = "[sigh]";
-    pub const SHUSH_TAG: &str = "[shush]";
-    pub const COUGH_TAG: &str = "[cough]";
-    pub const GROAN_TAG: &str = "[groan]";
-    pub const SNIFF_TAG: &str = "[sniff]";
-    pub const GASP_TAG: &str = "[gasp]";
-    pub const CHUCKLE_TAG: &str = "[chuckle]";
-    pub const LAUGH_TAG: &str = "[laugh]";
 
     fn new(
         speech_encoder: SpeechEncoder,
@@ -394,5 +374,70 @@ impl RepetitionPenaltyLogitsProcessor {
             }
         }
         scores_processed
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ParalinguisticTag {
+    Angry,
+    Fear,
+    Surprised,
+    Whispering,
+    Advertisement,
+    Dramatic,
+    Narration,
+    Crying,
+    Happy,
+    Sarcastic,
+    ClearThroat,
+    Sigh,
+    Shush,
+    Cough,
+    Groan,
+    Sniff,
+    Gasp,
+    Chuckle,
+    Laugh,
+}
+
+impl ParalinguisticTag {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Angry => "[angry]",
+            Self::Fear => "[fear]",
+            Self::Surprised => "[surprised]",
+            Self::Whispering => "[whispering]",
+            Self::Advertisement => "[advertisement]",
+            Self::Dramatic => "[dramatic]",
+            Self::Narration => "[narration]",
+            Self::Crying => "[crying]",
+            Self::Happy => "[happy]",
+            Self::Sarcastic => "[sarcastic]",
+            Self::ClearThroat => "[clear throat]",
+            Self::Sigh => "[sigh]",
+            Self::Shush => "[shush]",
+            Self::Cough => "[cough]",
+            Self::Groan => "[groan]",
+            Self::Sniff => "[sniff]",
+            Self::Gasp => "[gasp]",
+            Self::Chuckle => "[chuckle]",
+            Self::Laugh => "[laugh]",
+        }
+    }
+}
+
+impl Display for ParalinguisticTag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub trait ParalinguisticStrExt {
+    fn with_tag(&self, tag: ParalinguisticTag) -> String;
+}
+
+impl ParalinguisticStrExt for str {
+    fn with_tag(&self, tag: ParalinguisticTag) -> String {
+        format!("{tag} {self}")
     }
 }

@@ -7,6 +7,6 @@ mod models;
 
 pub type ChatterboxError = chatterbox_turbo::Error;
 
-pub use chatterbox_turbo::ChatterboxTurbo;
+pub use chatterbox_turbo::{ChatterboxTurbo, ParalinguisticStrExt, ParalinguisticTag};
 pub use models::Variant;
 pub use ort::session::builder::AutoDevicePolicy;
