@@ -433,11 +433,22 @@ impl Display for ParalinguisticTag {
 }
 
 pub trait ParalinguisticStrExt {
-    fn with_tag(&self, tag: ParalinguisticTag) -> String;
+    /// Prepends `tag` to the beginning of the text, conditioning the whole utterance on it.
+    fn with_tag(&self, tag: ParalinguisticTag) -> String {
+        self.with_tags(std::iter::once(tag))
+    }
+    /// Prepends `tags` (in order) to the beginning of the text, conditioning the whole utterance
+    /// on all of them.
+    fn with_tags(&self, tags: impl IntoIterator<Item = ParalinguisticTag>) -> String;
 }
 
 impl ParalinguisticStrExt for str {
-    fn with_tag(&self, tag: ParalinguisticTag) -> String {
-        format!("{tag} {self}")
+    fn with_tags(&self, tags: impl IntoIterator<Item = ParalinguisticTag>) -> String {
+        let prefix = tags
+            .into_iter()
+            .map(|t| t.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{prefix} {self}")
     }
 }
