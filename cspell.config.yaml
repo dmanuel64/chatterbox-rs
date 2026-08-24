@@ -16,6 +16,7 @@ words:
   - ndarray
   - Onnx
   - reqwest
+  - Resampler
   - thiserror
 ignoreWords: []
 import: []

@@ -6,14 +6,20 @@ edition = "2024"
 [dependencies]
 directories = "6"
 futures = { version = "0.3", optional = true }
+hound = "3"
+indicatif = "0.18"
 ndarray = "0.17"
 ort = "2.0.0-rc.13"
 rand = "0.10"
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 rubato = "5"
+serde = { version = "1", features = ["derive"], optional = true }
 symphonia = { version = "0.6", features = ["wav", "pcm"] }
 thiserror = "2"
-tokenizers = "0.23"
+tokenizers = { version = "0.23", default-features = false, features = [
+    "progressbar",
+    "onig",
+] }
 tokio = { version = "1", features = ["fs", "io-util"], optional = true }
 typed_floats = "1"
 url = { version = "2", optional = true }
@@ -29,6 +35,8 @@ common-audio-formats = ["mp3", "mp4"]
 all-audio-formats = ["symphonia/all"]
 
 download = ["dep:reqwest", "dep:futures", "dep:url", "dep:tokio"]
+
+serde = ["dep:serde"]
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }

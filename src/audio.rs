@@ -3,7 +3,7 @@ use rubato::{
     Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,
     WindowFunction, audioadapter_buffers::direct::SequentialSliceOfVecs,
 };
-use std::io::Cursor;
+use std::{io::Cursor, path::Path};
 use symphonia::core::{
     codecs::{CodecParameters, audio::AudioDecoderOptions},
     formats::{FormatOptions, TrackType, probe::Hint},
@@ -24,6 +24,8 @@ pub enum Error {
     ResamplerConstruction(#[from] rubato::ResamplerConstructionError),
     #[error("failed to resample reference audio: {0}")]
     Resample(#[from] rubato::ResampleError),
+    #[error("failed to write WAV file: {0}")]
+    Wav(#[from] hound::Error),
 }
 
 /// Loads an audio file of any supported format into mono `f32` samples at `target_sample_rate`,
@@ -42,6 +44,22 @@ pub fn load(bytes: Vec<u8>, target_sample_rate: u32) -> Result<ArrayD<f32>, Erro
     Ok(Array2::from_shape_vec((1, len), samples)
         .expect("sample count should match array shape")
         .into_dyn())
+}
+
+/// Writes mono `f32` samples to a WAV file at `output_path`, at `sample_rate`.
+pub fn write(samples: &[f32], sample_rate: u32, output_path: impl AsRef<Path>) -> Result<(), Error> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(output_path, spec)?;
+    for &sample in samples {
+        writer.write_sample(sample)?;
+    }
+    writer.finalize()?;
+    Ok(())
 }
 
 fn decode_to_mono_f32(bytes: Vec<u8>) -> Result<(Vec<f32>, u32), Error> {

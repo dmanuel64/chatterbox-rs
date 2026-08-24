@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::config;
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Variant {
     #[default]
     Fp32,
@@ -48,6 +49,7 @@ pub trait Model {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpeechEncoder {
     pub variant: Variant,
 }
@@ -63,6 +65,7 @@ impl Model for SpeechEncoder {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TokenEmbedder {
     pub variant: Variant,
 }
@@ -78,6 +81,7 @@ impl Model for TokenEmbedder {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LanguageModel {
     pub variant: Variant,
 }
@@ -93,6 +97,7 @@ impl Model for LanguageModel {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConditionalDecoder {
     pub variant: Variant,
 }

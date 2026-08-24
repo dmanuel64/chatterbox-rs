@@ -28,13 +28,16 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-const SAMPLE_RATE: u32 = 24000;
 const START_SPEECH_TOKEN: i64 = 6561;
 const STOP_SPEECH_TOKEN: i64 = 6562;
 const SILENCE_TOKEN: i64 = 4299;
-const NUM_KV_HEADS: usize = 16;
-const HEAD_DIM: usize = 64;
 
+// Default hyper parameters
+const DEFAULT_SAMPLE_RATE: u32 = 24000;
+const DEFAULT_NUM_KV_HEADS: usize = 16;
+const DEFAULT_HEAD_DIM: usize = 64;
+
+#[derive(Debug)]
 pub struct ChatterboxTurbo {
     speech_encoder: SpeechEncoder,
     token_embedder: TokenEmbedder,
@@ -45,6 +48,9 @@ pub struct ChatterboxTurbo {
     language_model_session: Session,
     conditional_decoder_session: Session,
     tokenizer: tokenizers::Tokenizer,
+    pub sample_rate: u32,
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
 }
 
 pub struct GenerateOptions {
@@ -67,6 +73,9 @@ pub struct LoadOptions {
     pub token_embedder: Variant,
     pub language_model: Variant,
     pub conditional_decoder: Variant,
+    pub sample_rate: u32,
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
 }
 
 impl Default for LoadOptions {
@@ -77,6 +86,9 @@ impl Default for LoadOptions {
             token_embedder: Variant::default(),
             language_model: Variant::default(),
             conditional_decoder: Variant::default(),
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            num_kv_heads: DEFAULT_NUM_KV_HEADS,
+            head_dim: DEFAULT_HEAD_DIM,
         }
     }
 }
@@ -90,6 +102,9 @@ impl ChatterboxTurbo {
         language_model: LanguageModel,
         conditional_decoder: ConditionalDecoder,
         device_policy: AutoDevicePolicy,
+        sample_rate: u32,
+        num_kv_heads: usize,
+        head_dim: usize,
     ) -> Result<Self, Error> {
         let speech_encoder_session = Session::builder()?
             .with_auto_device(device_policy)?
@@ -119,6 +134,9 @@ impl ChatterboxTurbo {
             language_model_session,
             conditional_decoder_session,
             tokenizer,
+            sample_rate,
+            num_kv_heads,
+            head_dim,
         })
     }
 
@@ -147,11 +165,14 @@ impl ChatterboxTurbo {
                 variant: options.conditional_decoder,
             },
             options.device_policy,
+            options.sample_rate,
+            options.num_kv_heads,
+            options.head_dim,
         )
     }
 
     fn prepare_audio_input(&self, reference_audio_bytes: Vec<u8>) -> Result<ArrayD<f32>, Error> {
-        Ok(crate::audio::load(reference_audio_bytes, SAMPLE_RATE)?)
+        Ok(crate::audio::load(reference_audio_bytes, self.sample_rate)?)
     }
 
     fn prepare_text_input(&self, text: &str) -> Result<ArrayD<i64>, Error> {
@@ -169,7 +190,7 @@ impl ChatterboxTurbo {
         generate_tokens: &ArrayRefD<i64>,
         speaker_embeddings: ArrayD<i64>,
         speaker_features: ArrayD<i64>,
-    ) -> Result<ArrayD<i64>, Error> {
+    ) -> Result<ArrayD<f32>, Error> {
         let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
         let silence_tokens =
             Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
@@ -195,7 +216,7 @@ impl ChatterboxTurbo {
         text: &str,
         reference_audio_bytes: Vec<u8>,
         options: GenerateOptions,
-    ) -> Result<Vec<i64>, Error> {
+    ) -> Result<Vec<f32>, Error> {
         let audio_values = self.prepare_audio_input(reference_audio_bytes)?;
         let mut input_ids = self.prepare_text_input(text)?;
 
@@ -245,7 +266,7 @@ impl ChatterboxTurbo {
                     // TODO: dtype=np.float16 if i.type == 'tensor(float16)' else np.float32)
                     past_key_values.push((
                         input.name().to_string(),
-                        Array4::<f32>::zeros(Ix4(batch_size, NUM_KV_HEADS, 0, HEAD_DIM)),
+                        Array4::<f32>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
                     ));
                 }
                 attention_mask = Array::ones(Ix2(batch_size, seq_len));
@@ -321,7 +342,7 @@ impl ChatterboxTurbo {
         text: &str,
         reference_audio_path: impl AsRef<Path>,
         options: GenerateOptions,
-    ) -> Result<Vec<i64>, Error> {
+    ) -> Result<Vec<f32>, Error> {
         let target_audio_bytes = fs::read(reference_audio_path)?;
         self.generate(text, target_audio_bytes, options)
     }
@@ -333,8 +354,12 @@ impl ChatterboxTurbo {
         output_path: impl AsRef<Path>,
         options: GenerateOptions,
     ) -> Result<(), Error> {
-        let generated_bytes = self.generate(text, reference_audio_bytes, options)?;
-        todo!()
+        let generated_samples = self.generate(text, reference_audio_bytes, options)?;
+        Ok(crate::audio::write(
+            &generated_samples,
+            self.sample_rate,
+            output_path,
+        )?)
     }
 
     pub fn generate_with_files(
