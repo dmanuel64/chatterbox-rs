@@ -1,4 +1,7 @@
-use chatterbox_rs::{AutoDevicePolicy, ChatterboxTurbo, GenerateOptions, LoadOptions, Variant};
+use chatterbox_rs::{
+    AutoDevicePolicy, ChatterboxTurbo, GenerateOptions, GraphOptimizationLevel, LoadOptions,
+    Variant,
+};
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use std::path::PathBuf;
@@ -22,6 +25,10 @@ struct Args {
     /// Execution-provider device selection policy
     #[arg(long, value_enum, default_value_t = DevicePolicy::MaxPerformance)]
     device_policy: DevicePolicy,
+
+    /// ONNX graph optimization level
+    #[arg(long, value_enum, default_value_t = OptLevel::All)]
+    graph_optimization_level: OptLevel,
 
     /// Maximum number of speech tokens to generate
     #[arg(long, default_value_t = 1024)]
@@ -78,9 +85,43 @@ impl From<DevicePolicy> for AutoDevicePolicy {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum OptLevel {
+    Disable,
+    Level1,
+    Level2,
+    Level3,
+    All,
+}
+
+impl From<OptLevel> for GraphOptimizationLevel {
+    fn from(value: OptLevel) -> Self {
+        match value {
+            OptLevel::Disable => GraphOptimizationLevel::Disable,
+            OptLevel::Level1 => GraphOptimizationLevel::Level1,
+            OptLevel::Level2 => GraphOptimizationLevel::Level2,
+            OptLevel::Level3 => GraphOptimizationLevel::Level3,
+            OptLevel::All => GraphOptimizationLevel::All,
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+
+    let env = ort::environment::Environment::current()?;
+    println!("Discovered execution provider devices:");
+    for device in env.devices() {
+        let hw = device.hardware_device();
+        println!(
+            "  {} ({}) - {:?} [{}]",
+            device.ep()?,
+            device.ep_vendor()?,
+            hw.ty(),
+            hw.vendor()?
+        );
+    }
 
     let args = Args::parse();
     let variant: Variant = args.variant.into();
@@ -95,6 +136,7 @@ async fn main() -> Result<()> {
 
     let mut chatterbox = ChatterboxTurbo::load_with_options(LoadOptions {
         device_policy: args.device_policy.into(),
+        graph_optimization_level: args.graph_optimization_level.into(),
         speech_encoder: variant,
         token_embedder: variant,
         language_model: variant,

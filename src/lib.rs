@@ -11,4 +11,4 @@ pub use chatterbox_turbo::{
     ChatterboxTurbo, GenerateOptions, LoadOptions, ParalinguisticStrExt, ParalinguisticTag,
 };
 pub use models::Variant;
-pub use ort::session::builder::AutoDevicePolicy;
+pub use ort::session::builder::{AutoDevicePolicy, GraphOptimizationLevel};

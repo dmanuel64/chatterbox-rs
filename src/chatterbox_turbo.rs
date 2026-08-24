@@ -4,7 +4,10 @@ use crate::{
 };
 use ndarray::{concatenate, prelude::*};
 use ort::{
-    session::{Session, builder::AutoDevicePolicy},
+    session::{
+        Session,
+        builder::{AutoDevicePolicy, GraphOptimizationLevel, SessionBuilder},
+    },
     value::Tensor,
 };
 use std::{fmt::Display, fs, num::NonZero, path::Path};
@@ -78,11 +81,25 @@ enum AutoDevicePolicyDef {
     MinPower,
 }
 
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(remote = "GraphOptimizationLevel", rename_all = "snake_case")]
+#[non_exhaustive]
+enum GraphOptimizationLevelDef {
+    Disable,
+    Level1,
+    Level2,
+    Level3,
+    All,
+}
+
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LoadOptions {
     #[cfg_attr(feature = "serde", serde(with = "AutoDevicePolicyDef"))]
     pub device_policy: AutoDevicePolicy,
+    #[cfg_attr(feature = "serde", serde(with = "GraphOptimizationLevelDef"))]
+    pub graph_optimization_level: GraphOptimizationLevel,
     pub speech_encoder: Variant,
     pub token_embedder: Variant,
     pub language_model: Variant,
@@ -96,6 +113,7 @@ impl Default for LoadOptions {
     fn default() -> Self {
         Self {
             device_policy: AutoDevicePolicy::MaxPerformance,
+            graph_optimization_level: GraphOptimizationLevel::All,
             speech_encoder: Variant::default(),
             token_embedder: Variant::default(),
             language_model: Variant::default(),
@@ -107,6 +125,30 @@ impl Default for LoadOptions {
     }
 }
 
+/// Builds a [`SessionBuilder`] configured for `device_policy`/`graph_optimization_level`.
+///
+/// When the `cuda` feature is enabled, this also explicitly registers the CUDA execution
+/// provider. That's necessary in addition to `with_auto_device`: `AutoDevicePolicy` only
+/// selects among execution providers that participate in ONNX Runtime's newer EP-auto-discovery
+/// mechanism, which CUDA does not — it only supports the older, explicit registration style used
+/// here. `fail_silently()` means this has no effect (falls through to whatever `with_auto_device`
+/// picks) on machines where CUDA isn't actually available.
+fn configure_session_builder(
+    device_policy: AutoDevicePolicy,
+    graph_optimization_level: GraphOptimizationLevel,
+) -> Result<SessionBuilder, Error> {
+    let builder = Session::builder()?;
+    #[cfg(feature = "cuda")]
+    let builder = builder
+        .with_execution_providers([ort::ep::CUDA::default().build().fail_silently()])
+        .map_err(|err| Error::OnnxGeneric(err.into()))?;
+    builder
+        .with_auto_device(device_policy)
+        .map_err(|err| Error::OnnxGeneric(err.into()))?
+        .with_optimization_level(graph_optimization_level)
+        .map_err(|err| Error::OnnxGeneric(err.into()))
+}
+
 impl ChatterboxTurbo {
     pub const END_OF_TEXT_TOKEN: &str = "<|endoftext|>";
 
@@ -116,26 +158,23 @@ impl ChatterboxTurbo {
         language_model: LanguageModel,
         conditional_decoder: ConditionalDecoder,
         device_policy: AutoDevicePolicy,
+        graph_optimization_level: GraphOptimizationLevel,
         sample_rate: u32,
         num_kv_heads: usize,
         head_dim: usize,
     ) -> Result<Self, Error> {
-        let speech_encoder_session = Session::builder()?
-            .with_auto_device(device_policy)
-            .map_err(|err| Error::OnnxGeneric(err.into()))?
-            .commit_from_file(speech_encoder.graph_file())?;
-        let token_embedder_session = Session::builder()?
-            .with_auto_device(device_policy)
-            .map_err(|err| Error::OnnxGeneric(err.into()))?
-            .commit_from_file(token_embedder.graph_file())?;
-        let language_model_session = Session::builder()?
-            .with_auto_device(device_policy)
-            .map_err(|err| Error::OnnxGeneric(err.into()))?
-            .commit_from_file(language_model.graph_file())?;
-        let conditional_decoder_session = Session::builder()?
-            .with_auto_device(device_policy)
-            .map_err(|err| Error::OnnxGeneric(err.into()))?
-            .commit_from_file(conditional_decoder.graph_file())?;
+        let speech_encoder_session =
+            configure_session_builder(device_policy, graph_optimization_level)?
+                .commit_from_file(speech_encoder.graph_file())?;
+        let token_embedder_session =
+            configure_session_builder(device_policy, graph_optimization_level)?
+                .commit_from_file(token_embedder.graph_file())?;
+        let language_model_session =
+            configure_session_builder(device_policy, graph_optimization_level)?
+                .commit_from_file(language_model.graph_file())?;
+        let conditional_decoder_session =
+            configure_session_builder(device_policy, graph_optimization_level)?
+                .commit_from_file(conditional_decoder.graph_file())?;
         let tokenizer = tokenizers::Tokenizer::from_file(
             config::TOKENIZER_PATH
                 .read()
@@ -183,6 +222,7 @@ impl ChatterboxTurbo {
                 variant: options.conditional_decoder,
             },
             options.device_policy,
+            options.graph_optimization_level,
             options.sample_rate,
             options.num_kv_heads,
             options.head_dim,
@@ -340,6 +380,20 @@ impl ChatterboxTurbo {
             for ((_, kv), new_kv) in past_key_values.iter_mut().zip(present_key_values) {
                 *kv = new_kv;
             }
+        }
+        // `decode_audio` unconditionally strips the last token, assuming it's the stop token.
+        // If we hit `max_new_tokens` without ever sampling one, append it so a real generated
+        // token doesn't get silently discarded instead.
+        if !generate_tokens
+            .slice(s![.., -1..])
+            .iter()
+            .all(|&id| id == STOP_SPEECH_TOKEN)
+        {
+            generate_tokens = concatenate![
+                Axis(1),
+                generate_tokens,
+                Array2::from_elem(Ix2(batch_size, 1), STOP_SPEECH_TOKEN).into_dyn()
+            ];
         }
         self.decode_audio(
             prompt_token.expect("prompt token to be cached"),
