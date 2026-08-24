@@ -2633,6 +2633,7 @@ checksum = "436de2fdc42c0f07890f4b51dcc90a468b0b12280f49caff1cf57ce2e646817c"
 dependencies = [
  "const_fn",
  "rustversion",
+ "serde",
  "typed_floats_macros",
 ]
 

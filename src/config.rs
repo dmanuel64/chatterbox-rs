@@ -2,7 +2,6 @@ use directories::ProjectDirs;
 #[cfg(feature = "download")]
 use std::env;
 use std::{
-    cell::RefCell,
     path::{Path, PathBuf},
     sync::{LazyLock, RwLock},
 };

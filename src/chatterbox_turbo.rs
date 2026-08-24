@@ -53,6 +53,8 @@ pub struct ChatterboxTurbo {
     pub head_dim: usize,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenerateOptions {
     pub max_new_tokens: NonZero<u32>,
     pub repetition_penalty: tf32::StrictlyPositiveFinite,
@@ -67,7 +69,24 @@ impl Default for GenerateOptions {
     }
 }
 
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(remote = "AutoDevicePolicy", rename_all = "snake_case")]
+#[non_exhaustive]
+enum AutoDevicePolicyDef {
+    Default,
+    PreferCPU,
+    PreferNPU,
+    PreferGPU,
+    MaxPerformance,
+    MaxEfficiency,
+    MinPower,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LoadOptions {
+    #[cfg_attr(feature = "serde", serde(with = "AutoDevicePolicyDef"))]
     pub device_policy: AutoDevicePolicy,
     pub speech_encoder: Variant,
     pub token_embedder: Variant,

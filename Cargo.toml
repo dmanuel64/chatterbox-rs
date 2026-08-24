@@ -36,7 +36,7 @@ all-audio-formats = ["symphonia/all"]
 
 download = ["dep:reqwest", "dep:futures", "dep:url", "dep:tokio"]
 
-serde = ["dep:serde"]
+serde = ["dep:serde", "typed_floats/serde"]
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
