@@ -1,4 +1,5 @@
 use futures::{StreamExt, TryStreamExt, stream};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::Url;
 use std::{
     io,
@@ -26,6 +27,20 @@ pub enum Error {
         kind: &'static str,
         source: url::ParseError,
     },
+    #[error("incomplete download of {url}: expected {expected} bytes, got {actual}")]
+    Incomplete {
+        url: Url,
+        expected: u64,
+        actual: u64,
+    },
+}
+
+fn download_progress_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{msg}\n{bar:40.cyan/blue} {bytes}/{total_bytes} ({bytes_per_sec}, {eta})",
+    )
+    .expect("valid progress bar template")
+    .progress_chars("#>-")
 }
 
 async fn download_file(
@@ -33,6 +48,7 @@ async fn download_file(
     dest: &Path,
     auth_token: Option<String>,
     force: bool,
+    multi: &MultiProgress,
 ) -> Result<(), Error> {
     if force || !dest.exists() {
         let client = reqwest::Client::new();
@@ -41,7 +57,16 @@ async fn download_file(
             request = request.bearer_auth(t);
         }
         let response = request.send().await?;
+        let expected_len = response.content_length();
         let mut byte_stream = response.bytes_stream();
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|source| Error::Streaming {
+                    url: url.clone(),
+                    source,
+                })?;
+        }
         let mut file = File::create(dest)
             .await
             .map_err(|source| Error::Streaming {
@@ -49,15 +74,55 @@ async fn download_file(
                 source,
             })?;
 
-        while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|source| Error::Streaming {
-                    url: url.clone(),
-                    source,
-                })?;
+        let pb = if *config::SHOW_DOWNLOAD_PROGRESS
+            .read()
+            .expect("SHOW_DOWNLOAD_PROGRESS lock poisoned")
+        {
+            let pb = multi.add(match expected_len {
+                Some(len) => ProgressBar::new(len),
+                None => ProgressBar::new_spinner(),
+            });
+            pb.set_style(download_progress_style());
+            pb.set_message(dest.file_name().unwrap_or_default().to_string_lossy().into_owned());
+            pb
+        } else {
+            ProgressBar::hidden()
+        };
+
+        let mut bytes_written: u64 = 0;
+        let stream_result: Result<(), Error> = async {
+            while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = chunk_result?;
+                bytes_written += chunk.len() as u64;
+                pb.set_position(bytes_written);
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|source| Error::Streaming {
+                        url: url.clone(),
+                        source,
+                    })?;
+            }
+            Ok(())
         }
+        .await;
+
+        if let Err(err) = stream_result {
+            pb.finish_and_clear();
+            let _ = tokio::fs::remove_file(dest).await;
+            return Err(err);
+        }
+        if let Some(expected) = expected_len
+            && bytes_written != expected
+        {
+            pb.finish_and_clear();
+            let _ = tokio::fs::remove_file(dest).await;
+            return Err(Error::Incomplete {
+                url,
+                expected,
+                actual: bytes_written,
+            });
+        }
+        pb.finish_and_clear();
     }
     Ok(())
 }
@@ -69,6 +134,7 @@ async fn download_hf_file(
     branch: &str,
     dest: &Path,
     force: bool,
+    multi: &MultiProgress,
 ) -> Result<(), Error> {
     static HF_URL: LazyLock<Url> = LazyLock::new(|| {
         Url::from_str("https://huggingface.co/").expect("URL to be parsed correctly")
@@ -107,7 +173,7 @@ async fn download_hf_file(
         .read()
         .expect("HF_TOKEN lock poisoned")
         .clone();
-    download_file(file_url, dest, auth_token, force).await
+    download_file(file_url, dest, auth_token, force, multi).await
 }
 
 async fn download_chatterbot_file(
@@ -115,6 +181,7 @@ async fn download_chatterbot_file(
     dest: &Path,
     force: bool,
     use_mirror: bool,
+    multi: &MultiProgress,
 ) -> Result<(), Error> {
     const CHATTERBOT_BRANCH: &str = "main";
     download_hf_file(
@@ -128,6 +195,7 @@ async fn download_chatterbot_file(
         CHATTERBOT_BRANCH,
         dest,
         force,
+        multi,
     )
     .await
 }
@@ -139,16 +207,12 @@ pub struct SourceDest {
 }
 
 async fn download_chatterbot_files(targets: &[SourceDest], use_mirror: bool) -> Result<(), Error> {
+    let multi = MultiProgress::new();
     stream::iter(targets)
-        .map(
-            |SourceDest {
-                 source,
-                 dest,
-                 force,
-             }| async move {
-                download_chatterbot_file(&source, &dest, *force, use_mirror).await
-            },
-        )
+        .map(|SourceDest { source, dest, force }| {
+            let multi = &multi;
+            async move { download_chatterbot_file(source, dest, *force, use_mirror, multi).await }
+        })
         .buffer_unordered(
             *config::MAX_CONCURRENT_DOWNLOADS
                 .read()

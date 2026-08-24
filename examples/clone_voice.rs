@@ -1,5 +1,6 @@
-use chatterbox_rs::{ChatterboxTurbo, GenerateOptions, Variant};
+use chatterbox_rs::{AutoDevicePolicy, ChatterboxTurbo, GenerateOptions, LoadOptions, Variant};
 use clap::{Parser, ValueEnum};
+use color_eyre::Result;
 use std::path::PathBuf;
 
 /// Clone a voice from a reference clip and synthesize new speech from text.
@@ -17,6 +18,10 @@ struct Args {
     /// Model weight variant to use
     #[arg(long, value_enum, default_value_t = ModelVariant::Fp32)]
     variant: ModelVariant,
+
+    /// Execution-provider device selection policy
+    #[arg(long, value_enum, default_value_t = DevicePolicy::MaxPerformance)]
+    device_policy: DevicePolicy,
 
     /// Maximum number of speech tokens to generate
     #[arg(long, default_value_t = 1024)]
@@ -48,15 +53,54 @@ impl From<ModelVariant> for Variant {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Clone, Copy, ValueEnum)]
+enum DevicePolicy {
+    Default,
+    PreferCpu,
+    PreferNpu,
+    PreferGpu,
+    MaxPerformance,
+    MaxEfficiency,
+    MinPower,
+}
+
+impl From<DevicePolicy> for AutoDevicePolicy {
+    fn from(value: DevicePolicy) -> Self {
+        match value {
+            DevicePolicy::Default => AutoDevicePolicy::Default,
+            DevicePolicy::PreferCpu => AutoDevicePolicy::PreferCPU,
+            DevicePolicy::PreferNpu => AutoDevicePolicy::PreferNPU,
+            DevicePolicy::PreferGpu => AutoDevicePolicy::PreferGPU,
+            DevicePolicy::MaxPerformance => AutoDevicePolicy::MaxPerformance,
+            DevicePolicy::MaxEfficiency => AutoDevicePolicy::MaxEfficiency,
+            DevicePolicy::MinPower => AutoDevicePolicy::MinPower,
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let args = Args::parse();
+    let variant: Variant = args.variant.into();
+
+    #[cfg(feature = "download")]
+    chatterbox_rs::downloader::download_missing(variant, false).await?;
 
     let options = GenerateOptions {
         max_new_tokens: args.max_new_tokens.try_into()?,
         repetition_penalty: args.repetition_penalty.try_into()?,
     };
 
-    let mut chatterbox = ChatterboxTurbo::load(args.variant.into())?;
+    let mut chatterbox = ChatterboxTurbo::load_with_options(LoadOptions {
+        device_policy: args.device_policy.into(),
+        speech_encoder: variant,
+        token_embedder: variant,
+        language_model: variant,
+        conditional_decoder: variant,
+        ..Default::default()
+    })?;
     chatterbox.generate_with_files(&args.text, args.reference_audio, args.output, options)?;
 
     Ok(())

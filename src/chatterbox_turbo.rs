@@ -4,10 +4,7 @@ use crate::{
 };
 use ndarray::{concatenate, prelude::*};
 use ort::{
-    session::{
-        Session,
-        builder::{AutoDevicePolicy, SessionBuilder},
-    },
+    session::{Session, builder::AutoDevicePolicy},
     value::Tensor,
 };
 use std::{fmt::Display, fs, num::NonZero, path::Path};
@@ -18,8 +15,6 @@ use typed_floats::tf32;
 pub enum Error {
     #[error("An ONNX runtime error occurred: {0}")]
     OnnxGeneric(#[from] ort::Error),
-    #[error("An ONNX runtime error occurred: {0}")]
-    OnnxSession(#[from] ort::Error<SessionBuilder>),
     #[error("A tokenizer error occurred: {0}")]
     Tokenizer(#[from] tokenizers::Error),
     #[error("An audio error occurred: {0}")]
@@ -126,16 +121,20 @@ impl ChatterboxTurbo {
         head_dim: usize,
     ) -> Result<Self, Error> {
         let speech_encoder_session = Session::builder()?
-            .with_auto_device(device_policy)?
+            .with_auto_device(device_policy)
+            .map_err(|err| Error::OnnxGeneric(err.into()))?
             .commit_from_file(speech_encoder.graph_file())?;
         let token_embedder_session = Session::builder()?
-            .with_auto_device(device_policy)?
+            .with_auto_device(device_policy)
+            .map_err(|err| Error::OnnxGeneric(err.into()))?
             .commit_from_file(token_embedder.graph_file())?;
         let language_model_session = Session::builder()?
-            .with_auto_device(device_policy)?
+            .with_auto_device(device_policy)
+            .map_err(|err| Error::OnnxGeneric(err.into()))?
             .commit_from_file(language_model.graph_file())?;
         let conditional_decoder_session = Session::builder()?
-            .with_auto_device(device_policy)?
+            .with_auto_device(device_policy)
+            .map_err(|err| Error::OnnxGeneric(err.into()))?
             .commit_from_file(conditional_decoder.graph_file())?;
         let tokenizer = tokenizers::Tokenizer::from_file(
             config::TOKENIZER_PATH
