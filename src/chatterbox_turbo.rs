@@ -204,20 +204,15 @@ impl ChatterboxTurbo {
 
     fn decode_audio(
         &mut self,
-        prompt_token: i64,
+        prompt_token: ArrayD<i64>,
         generate_tokens: &ArrayRefD<i64>,
-        speaker_embeddings: ArrayD<i64>,
-        speaker_features: ArrayD<i64>,
+        speaker_embeddings: ArrayD<f32>,
+        speaker_features: ArrayD<f32>,
     ) -> Result<ArrayD<f32>, Error> {
         let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
         let silence_tokens =
             Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
-        let speech_tokens = concatenate![
-            Axis(1),
-            array![prompt_token].into_dyn(),
-            speech_tokens,
-            silence_tokens
-        ];
+        let speech_tokens = concatenate![Axis(1), prompt_token, speech_tokens, silence_tokens];
 
         let output = self.conditional_decoder_session.run(ort::inputs![
             "speech_tokens" => Tensor::from_array(speech_tokens)?,
@@ -247,9 +242,9 @@ impl ChatterboxTurbo {
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
         let mut batch_size = 0;
         let mut past_key_values: Vec<(String, Array4<f32>)> = Vec::new();
-        let mut speaker_embeddings: Option<ArrayD<i64>> = None;
-        let mut speaker_features: Option<ArrayD<i64>> = None;
-        let mut prompt_token: Option<i64> = None;
+        let mut speaker_embeddings: Option<ArrayD<f32>> = None;
+        let mut speaker_features: Option<ArrayD<f32>> = None;
+        let mut prompt_token: Option<ArrayD<i64>> = None;
 
         for tokens_generated in 0..options.max_new_tokens.get() {
             let token_embedder_outputs = self.token_embedder_session.run(ort::inputs![
@@ -264,7 +259,7 @@ impl ChatterboxTurbo {
                 let speech_encoder_outputs =
                     self.speech_encoder_session.run(ort_speech_encoder_input)?;
                 let condition_embeddings = speech_encoder_outputs[0].try_extract_array()?;
-                prompt_token = Some(speech_encoder_outputs[1].try_extract_scalar()?);
+                prompt_token = Some(speech_encoder_outputs[1].try_extract_array()?.to_owned());
                 speaker_embeddings =
                     Some(speech_encoder_outputs[2].try_extract_array()?.to_owned());
                 speaker_features = Some(speech_encoder_outputs[3].try_extract_array()?.to_owned());
@@ -279,7 +274,7 @@ impl ChatterboxTurbo {
                     .language_model_session
                     .inputs()
                     .iter()
-                    .filter(|i| i.name() == "past_key_values")
+                    .filter(|i| i.name().contains("past_key_values"))
                 {
                     // TODO: dtype=np.float16 if i.type == 'tensor(float16)' else np.float32)
                     past_key_values.push((
@@ -294,9 +289,9 @@ impl ChatterboxTurbo {
                     .to_owned();
             }
             let mut language_model_inputs = ort::inputs![
-                "input_embeds" => Tensor::from_array(input_embeds)?,
+                "inputs_embeds" => Tensor::from_array(input_embeds)?,
                 "attention_mask" => Tensor::from_array(attention_mask.clone())?,
-                "position_id" => Tensor::from_array(position_ids.clone())?,
+                "position_ids" => Tensor::from_array(position_ids.clone())?,
             ];
             for (name, kv) in &past_key_values {
                 language_model_inputs
