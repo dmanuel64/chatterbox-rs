@@ -27,10 +27,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-const START_SPEECH_TOKEN: i64 = 6561;
-const STOP_SPEECH_TOKEN: i64 = 6562;
-const SILENCE_TOKEN: i64 = 4299;
-
 // Default hyper parameters
 const DEFAULT_SAMPLE_RATE: u32 = 24000;
 const DEFAULT_NUM_KV_HEADS: usize = 16;
@@ -243,7 +239,11 @@ fn configure_session_builder(
 }
 
 impl ChatterboxTurbo {
-    pub const END_OF_TEXT_TOKEN: &str = "<|endoftext|>";
+    #[allow(unused)]
+    const END_OF_TEXT_TOKEN: &str = "<|endoftext|>";
+    const START_SPEECH_TOKEN: i64 = 6561;
+    const STOP_SPEECH_TOKEN: i64 = 6562;
+    const SILENCE_TOKEN: i64 = 4299;
 
     fn new(
         speech_encoder: SpeechEncoder,
@@ -368,7 +368,8 @@ impl ChatterboxTurbo {
     ) -> Result<ArrayD<f32>, Error> {
         let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
         let silence_tokens =
-            Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
+            Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), Self::SILENCE_TOKEN)
+                .into_dyn();
         let speech_tokens = concatenate![Axis(1), prompt_token, speech_tokens, silence_tokens];
 
         let output = self.conditional_decoder_session.run(ort::inputs![
@@ -399,7 +400,7 @@ impl ChatterboxTurbo {
         let repetition_penalty_processor = RepetitionPenaltyLogitsProcessor {
             penalty: options.repetition_penalty,
         };
-        let mut generate_tokens = array![[START_SPEECH_TOKEN]].into_dyn();
+        let mut generate_tokens = array![[Self::START_SPEECH_TOKEN]].into_dyn();
         let mut attention_mask = Array2::default(Ix2::default());
 
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
@@ -474,7 +475,8 @@ impl ChatterboxTurbo {
                 language_model_inputs.push((name.as_str().into(), float_input(kv.clone(), *fp16)?));
             }
             let language_model_outputs = self.language_model_session.run(language_model_inputs)?;
-            let logits = extract_f32_array(&language_model_outputs[0], self.language_model_logits_fp16)?;
+            let logits =
+                extract_f32_array(&language_model_outputs[0], self.language_model_logits_fp16)?;
             let present_key_values: Vec<Array4<f32>> = language_model_outputs
                 .values()
                 .skip(1)
@@ -502,7 +504,7 @@ impl ChatterboxTurbo {
                 })
                 .insert_axis(last_axis);
             generate_tokens = concatenate![Axis(1), generate_tokens, input_ids];
-            if input_ids.iter().all(|&id| id == STOP_SPEECH_TOKEN) {
+            if input_ids.iter().all(|&id| id == Self::STOP_SPEECH_TOKEN) {
                 break;
             }
 
@@ -523,12 +525,12 @@ impl ChatterboxTurbo {
         if !generate_tokens
             .slice(s![.., -1..])
             .iter()
-            .all(|&id| id == STOP_SPEECH_TOKEN)
+            .all(|&id| id == Self::STOP_SPEECH_TOKEN)
         {
             generate_tokens = concatenate![
                 Axis(1),
                 generate_tokens,
-                Array2::from_elem(Ix2(batch_size, 1), STOP_SPEECH_TOKEN).into_dyn()
+                Array2::from_elem(Ix2(batch_size, 1), Self::STOP_SPEECH_TOKEN).into_dyn()
             ];
         }
         self.decode_audio(

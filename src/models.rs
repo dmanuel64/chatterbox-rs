@@ -43,6 +43,7 @@ pub trait Model {
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx"))
     }
 
+    #[allow(unused)]
     fn weights_file(&self) -> PathBuf {
         let onnx_dir = config::ONNX_DIR.read().expect("ONNX_DIR lock poisoned");
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx_data"))
