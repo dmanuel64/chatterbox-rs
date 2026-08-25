@@ -2,13 +2,14 @@ use crate::{
     Variant, config,
     models::{self, ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
 };
+use half::f16;
 use ndarray::{concatenate, prelude::*};
 use ort::{
     session::{
-        Session,
+        Session, SessionInputValue,
         builder::{AutoDevicePolicy, GraphOptimizationLevel, SessionBuilder},
     },
-    value::Tensor,
+    value::{DynValue, Tensor, TensorElementType, ValueType},
 };
 use std::{fmt::Display, fs, num::NonZero, path::Path};
 use thiserror::Error;
@@ -45,10 +46,76 @@ pub struct ChatterboxTurbo {
     token_embedder_session: Session,
     language_model_session: Session,
     conditional_decoder_session: Session,
+    // A given ONNX export doesn't necessarily convert every floating-point tensor uniformly —
+    // confirmed by a real "expected tensor(float), got tensor(float16)" mismatch on one of these
+    // graphs — so dtype is tracked per tensor rather than assumed for the whole session.
+    speech_encoder_audio_values_fp16: bool,
+    speech_encoder_condition_embeddings_fp16: bool,
+    speech_encoder_speaker_embeddings_fp16: bool,
+    speech_encoder_speaker_features_fp16: bool,
+    token_embedder_output_fp16: bool,
+    language_model_inputs_embeds_fp16: bool,
+    language_model_logits_fp16: bool,
+    conditional_decoder_speaker_embeddings_fp16: bool,
+    conditional_decoder_speaker_features_fp16: bool,
+    conditional_decoder_wav_fp16: bool,
     tokenizer: tokenizers::Tokenizer,
     pub sample_rate: u32,
     pub num_kv_heads: usize,
     pub head_dim: usize,
+}
+
+/// Whether `outlet` (a session input or output) is a `float16` tensor.
+fn outlet_is_fp16(outlet: &ort::value::Outlet) -> bool {
+    matches!(
+        outlet.dtype(),
+        ValueType::Tensor {
+            ty: TensorElementType::Float16,
+            ..
+        }
+    )
+}
+
+/// Whether `session`'s input named `name` is a `float16` tensor.
+fn named_input_is_fp16(session: &Session, name: &str) -> bool {
+    session
+        .inputs()
+        .iter()
+        .any(|input| input.name() == name && outlet_is_fp16(input))
+}
+
+/// Whether `session`'s output at position `index` is a `float16` tensor.
+fn output_is_fp16(session: &Session, index: usize) -> bool {
+    session.outputs().get(index).is_some_and(outlet_is_fp16)
+}
+
+/// Converts `array` into a [`SessionInputValue`], as `float16` if `fp16` is set (falling back to
+/// `float32` otherwise) — routes around every floating-point session input being hardcoded to
+/// `f32` regardless of which [`Variant`] is actually loaded.
+fn float_input<D: Dimension>(
+    array: Array<f32, D>,
+    fp16: bool,
+) -> Result<SessionInputValue<'static>, Error>
+where
+    Array<f32, D>: ort::value::OwnedTensorArrayData<f32>,
+    Array<f16, D>: ort::value::OwnedTensorArrayData<f16>,
+{
+    Ok(if fp16 {
+        Tensor::from_array(array.mapv(f16::from_f32))?.into()
+    } else {
+        Tensor::from_array(array)?.into()
+    })
+}
+
+/// Extracts a `float32` array from `value`, transparently upcasting from `float16` if `fp16` is
+/// set. Downstream math (repetition penalty, argmax, etc.) always runs in `f32` regardless of the
+/// loaded variant's native precision.
+fn extract_f32_array(value: &DynValue, fp16: bool) -> Result<ArrayD<f32>, Error> {
+    Ok(if fp16 {
+        value.try_extract_array::<f16>()?.mapv(f16::to_f32)
+    } else {
+        value.try_extract_array::<f32>()?.to_owned()
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -127,24 +194,50 @@ impl Default for LoadOptions {
 
 /// Builds a [`SessionBuilder`] configured for `device_policy`/`graph_optimization_level`.
 ///
-/// When the `cuda` feature is enabled, this also explicitly registers the CUDA execution
-/// provider. That's necessary in addition to `with_auto_device`: `AutoDevicePolicy` only
-/// selects among execution providers that participate in ONNX Runtime's newer EP-auto-discovery
-/// mechanism, which CUDA does not — it only supports the older, explicit registration style used
-/// here. `fail_silently()` means this has no effect (falls through to whatever `with_auto_device`
-/// picks) on machines where CUDA isn't actually available.
+/// When the `cuda` feature is enabled, this explicitly registers the CUDA execution provider and
+/// skips `with_auto_device` entirely — ONNX Runtime falls back to its implicit CPU provider for
+/// any node CUDA can't handle, so `with_auto_device` isn't needed for discovery here. It's
+/// deliberately *not* called in this case: real evidence (an `Fp16` `speech_encoder` run) showed
+/// `with_auto_device`'s heuristics overriding our explicit CUDA registration and routing a node to
+/// DirectML instead — which then hit DirectML's known `MultiHeadAttention` kernel bug — even
+/// though the identical `Fp32` graph correctly stayed on CUDA. `fail_silently()` on the CUDA
+/// registration still means this has no effect on machines where CUDA isn't actually available
+/// (falls through to plain CPU).
+///
+/// Without the `cuda` feature, `with_auto_device` is the only way to reach any GPU backend at all
+/// — it's what makes DirectML discoverable in this ONNX Runtime build (CUDA never participates in
+/// that newer EP-auto-discovery mechanism regardless).
+///
+/// `exclude_cuda` skips CUDA registration entirely, leaving only ONNX Runtime's implicit CPU
+/// provider. `token_embedder` needs this: its quantized variants (`Int8`/`Q4`/`Q4Fp16`) use a
+/// `GatherBlockQuantized` node for the embedding lookup, and ONNX Runtime's CUDA kernel for that
+/// op throws `cudaErrorInvalidValue` at runtime for this graph — a genuine CUDA EP bug, not
+/// something fixable here. Once CUDA claims a node and then fails running it, that's fatal, not a
+/// silent fallback, so it has to be kept off CUDA rather than merely deprioritized. This is applied
+/// unconditionally (not just for the quantized variants) since `token_embedder` is a single
+/// embedding lookup per generated token — negligible next to `language_model`'s full forward pass
+/// in the same loop iteration — so there's nothing meaningful to lose by keeping it off CUDA across
+/// every variant, and it sidesteps the bug entirely rather than only for the variants known to
+/// trigger it today.
 fn configure_session_builder(
-    device_policy: AutoDevicePolicy,
+    #[cfg_attr(feature = "cuda", allow(unused_variables))] device_policy: AutoDevicePolicy,
     graph_optimization_level: GraphOptimizationLevel,
+    #[cfg_attr(not(feature = "cuda"), allow(unused_variables))] exclude_cuda: bool,
 ) -> Result<SessionBuilder, Error> {
     let builder = Session::builder()?;
     #[cfg(feature = "cuda")]
+    let builder = if exclude_cuda {
+        builder
+    } else {
+        builder
+            .with_execution_providers([ort::ep::CUDA::default().build().fail_silently()])
+            .map_err(|err| Error::OnnxGeneric(err.into()))?
+    };
+    #[cfg(not(feature = "cuda"))]
     let builder = builder
-        .with_execution_providers([ort::ep::CUDA::default().build().fail_silently()])
+        .with_auto_device(device_policy)
         .map_err(|err| Error::OnnxGeneric(err.into()))?;
     builder
-        .with_auto_device(device_policy)
-        .map_err(|err| Error::OnnxGeneric(err.into()))?
         .with_optimization_level(graph_optimization_level)
         .map_err(|err| Error::OnnxGeneric(err.into()))
 }
@@ -164,17 +257,31 @@ impl ChatterboxTurbo {
         head_dim: usize,
     ) -> Result<Self, Error> {
         let speech_encoder_session =
-            configure_session_builder(device_policy, graph_optimization_level)?
+            configure_session_builder(device_policy, graph_optimization_level, false)?
                 .commit_from_file(speech_encoder.graph_file())?;
         let token_embedder_session =
-            configure_session_builder(device_policy, graph_optimization_level)?
+            configure_session_builder(device_policy, graph_optimization_level, true)?
                 .commit_from_file(token_embedder.graph_file())?;
         let language_model_session =
-            configure_session_builder(device_policy, graph_optimization_level)?
+            configure_session_builder(device_policy, graph_optimization_level, false)?
                 .commit_from_file(language_model.graph_file())?;
         let conditional_decoder_session =
-            configure_session_builder(device_policy, graph_optimization_level)?
+            configure_session_builder(device_policy, graph_optimization_level, false)?
                 .commit_from_file(conditional_decoder.graph_file())?;
+        let speech_encoder_audio_values_fp16 =
+            named_input_is_fp16(&speech_encoder_session, "audio_values");
+        let speech_encoder_condition_embeddings_fp16 = output_is_fp16(&speech_encoder_session, 0);
+        let speech_encoder_speaker_embeddings_fp16 = output_is_fp16(&speech_encoder_session, 2);
+        let speech_encoder_speaker_features_fp16 = output_is_fp16(&speech_encoder_session, 3);
+        let token_embedder_output_fp16 = output_is_fp16(&token_embedder_session, 0);
+        let language_model_inputs_embeds_fp16 =
+            named_input_is_fp16(&language_model_session, "inputs_embeds");
+        let language_model_logits_fp16 = output_is_fp16(&language_model_session, 0);
+        let conditional_decoder_speaker_embeddings_fp16 =
+            named_input_is_fp16(&conditional_decoder_session, "speaker_embeddings");
+        let conditional_decoder_speaker_features_fp16 =
+            named_input_is_fp16(&conditional_decoder_session, "speaker_features");
+        let conditional_decoder_wav_fp16 = output_is_fp16(&conditional_decoder_session, 0);
         let tokenizer = tokenizers::Tokenizer::from_file(
             config::TOKENIZER_PATH
                 .read()
@@ -190,6 +297,16 @@ impl ChatterboxTurbo {
             token_embedder_session,
             language_model_session,
             conditional_decoder_session,
+            speech_encoder_audio_values_fp16,
+            speech_encoder_condition_embeddings_fp16,
+            speech_encoder_speaker_embeddings_fp16,
+            speech_encoder_speaker_features_fp16,
+            token_embedder_output_fp16,
+            language_model_inputs_embeds_fp16,
+            language_model_logits_fp16,
+            conditional_decoder_speaker_embeddings_fp16,
+            conditional_decoder_speaker_features_fp16,
+            conditional_decoder_wav_fp16,
             tokenizer,
             sample_rate,
             num_kv_heads,
@@ -256,11 +373,17 @@ impl ChatterboxTurbo {
 
         let output = self.conditional_decoder_session.run(ort::inputs![
             "speech_tokens" => Tensor::from_array(speech_tokens)?,
-            "speaker_embeddings" => Tensor::from_array(speaker_embeddings)?,
-            "speaker_features" => Tensor::from_array(speaker_features)?
+            "speaker_embeddings" => float_input(
+                speaker_embeddings,
+                self.conditional_decoder_speaker_embeddings_fp16
+            )?,
+            "speaker_features" => float_input(
+                speaker_features,
+                self.conditional_decoder_speaker_features_fp16
+            )?
         ])?;
         // TODO: they have it as squeeze(axis=0)
-        let wav = output[0].try_extract_array()?.squeeze();
+        let wav = extract_f32_array(&output[0], self.conditional_decoder_wav_fp16)?.squeeze();
         Ok(wav.to_owned())
     }
 
@@ -281,7 +404,9 @@ impl ChatterboxTurbo {
 
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
         let mut batch_size = 0;
-        let mut past_key_values: Vec<(String, Array4<f32>)> = Vec::new();
+        // (input name, is fp16, cache tensor) — dtype captured once alongside the name since
+        // `present_key_values` outputs mirror these inputs 1:1 and share their dtype.
+        let mut past_key_values: Vec<(String, bool, Array4<f32>)> = Vec::new();
         let mut speaker_embeddings: Option<ArrayD<f32>> = None;
         let mut speaker_features: Option<ArrayD<f32>> = None;
         let mut prompt_token: Option<ArrayD<i64>> = None;
@@ -291,18 +416,30 @@ impl ChatterboxTurbo {
                 "input_ids" => Tensor::from_array(input_ids.clone())?
             ])?;
             let mut input_embeds: ArrayD<f32> =
-                token_embedder_outputs[0].try_extract_array()?.to_owned();
+                extract_f32_array(&token_embedder_outputs[0], self.token_embedder_output_fp16)?;
 
             if tokens_generated == 0 {
-                let ort_speech_encoder_input =
-                    ort::inputs!["audio_values" => Tensor::from_array(audio_values.clone())?];
+                let ort_speech_encoder_input = ort::inputs![
+                    "audio_values" => float_input(
+                        audio_values.clone(),
+                        self.speech_encoder_audio_values_fp16
+                    )?
+                ];
                 let speech_encoder_outputs =
                     self.speech_encoder_session.run(ort_speech_encoder_input)?;
-                let condition_embeddings = speech_encoder_outputs[0].try_extract_array()?;
+                let condition_embeddings = extract_f32_array(
+                    &speech_encoder_outputs[0],
+                    self.speech_encoder_condition_embeddings_fp16,
+                )?;
                 prompt_token = Some(speech_encoder_outputs[1].try_extract_array()?.to_owned());
-                speaker_embeddings =
-                    Some(speech_encoder_outputs[2].try_extract_array()?.to_owned());
-                speaker_features = Some(speech_encoder_outputs[3].try_extract_array()?.to_owned());
+                speaker_embeddings = Some(extract_f32_array(
+                    &speech_encoder_outputs[2],
+                    self.speech_encoder_speaker_embeddings_fp16,
+                )?);
+                speaker_features = Some(extract_f32_array(
+                    &speech_encoder_outputs[3],
+                    self.speech_encoder_speaker_features_fp16,
+                )?);
                 input_embeds = concatenate![Axis(1), condition_embeddings, input_embeds];
 
                 // Initialize cache and LLM inputs
@@ -316,9 +453,9 @@ impl ChatterboxTurbo {
                     .iter()
                     .filter(|i| i.name().contains("past_key_values"))
                 {
-                    // TODO: dtype=np.float16 if i.type == 'tensor(float16)' else np.float32)
                     past_key_values.push((
                         input.name().to_string(),
+                        outlet_is_fp16(input),
                         Array4::<f32>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
                     ));
                 }
@@ -329,23 +466,22 @@ impl ChatterboxTurbo {
                     .to_owned();
             }
             let mut language_model_inputs = ort::inputs![
-                "inputs_embeds" => Tensor::from_array(input_embeds)?,
+                "inputs_embeds" => float_input(input_embeds, self.language_model_inputs_embeds_fp16)?,
                 "attention_mask" => Tensor::from_array(attention_mask.clone())?,
                 "position_ids" => Tensor::from_array(position_ids.clone())?,
             ];
-            for (name, kv) in &past_key_values {
-                language_model_inputs
-                    .push((name.as_str().into(), Tensor::from_array(kv.clone())?.into()));
+            for (name, fp16, kv) in &past_key_values {
+                language_model_inputs.push((name.as_str().into(), float_input(kv.clone(), *fp16)?));
             }
             let language_model_outputs = self.language_model_session.run(language_model_inputs)?;
-            let logits = &language_model_outputs[0].try_extract_array()?;
+            let logits = extract_f32_array(&language_model_outputs[0], self.language_model_logits_fp16)?;
             let present_key_values: Vec<Array4<f32>> = language_model_outputs
                 .values()
                 .skip(1)
-                .map(|v| {
-                    v.try_extract_array::<f32>().map(|a| {
-                        a.to_owned()
-                            .into_dimensionality::<Ix4>()
+                .zip(past_key_values.iter())
+                .map(|(v, (_, fp16, _))| {
+                    extract_f32_array(&v, *fp16).map(|a| {
+                        a.into_dimensionality::<Ix4>()
                             .expect("KV cache tensor should be 4D")
                     })
                 })
@@ -377,7 +513,7 @@ impl ChatterboxTurbo {
                 Array2::<i64>::ones(Ix2(batch_size, 1))
             ];
             position_ids = position_ids.slice(s![.., -1..]).to_owned() + 1;
-            for ((_, kv), new_kv) in past_key_values.iter_mut().zip(present_key_values) {
+            for ((_, _, kv), new_kv) in past_key_values.iter_mut().zip(present_key_values) {
                 *kv = new_kv;
             }
         }

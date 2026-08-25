@@ -6,9 +6,9 @@ use crate::config;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Variant {
-    #[default]
     Fp32,
     Fp16,
+    #[default]
     Int8,
     Q4,
     Q4Fp16,
