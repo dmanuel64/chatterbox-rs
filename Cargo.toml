@@ -41,6 +41,8 @@ download = ["dep:reqwest", "dep:futures", "dep:url", "dep:tokio"]
 
 serde = ["dep:serde", "typed_floats/serde"]
 
+custom-variants = []
+
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"

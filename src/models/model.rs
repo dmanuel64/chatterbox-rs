@@ -62,11 +62,10 @@ pub struct Variant<F: Float> {
 }
 
 impl<F: Float + 'static> Variant<F> {
-    // TODO: refactor string to support custom variants
-    // #[cfg(feature = "custom-variants")]
-    // const fn new(kind: Kind) -> Self {
-    //     Self::new_inner(kind)
-    // }
+    #[cfg(feature = "custom-variants")]
+    const fn new(kind: Kind) -> Self {
+        Self::new_inner(kind)
+    }
 
     const fn new_inner(kind: Kind) -> Self {
         Self {
@@ -75,22 +74,27 @@ impl<F: Float + 'static> Variant<F> {
         }
     }
 
-    fn filename_suffix(&self) -> &'static str {
-        let is_half_precision = TypeId::of::<F>() == TypeId::of::<f16>();
+    fn filename_suffix(&self) -> String {
+        let graph_size = &type_name::<F>()[2..];
+        let float_type = TypeId::of::<F>();
         match self.kind {
             Kind::Baseline => {
-                if is_half_precision {
-                    "_fp16"
+                if float_type != TypeId::of::<f32>() {
+                    format!("_fp{graph_size}")
                 } else {
-                    ""
+                    String::new()
                 }
             }
             Kind::Quantized { weight_packing } => {
-                if let WeightPacking::Bit8 = weight_packing {
-                    "_quantized"
+                let mut o = if let WeightPacking::Bit8 = weight_packing {
+                    String::from("_quantized")
                 } else {
-                    if is_half_precision { "_q4f16" } else { "_q4" }
+                    String::from("")
+                };
+                if float_type != TypeId::of::<f32>() {
+                    o += &format!("_f{graph_size}");
                 }
+                o
             }
         }
     }
@@ -98,20 +102,19 @@ impl<F: Float + 'static> Variant<F> {
 
 impl<F: Float + 'static> Display for Variant<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let is_half_precision = TypeId::of::<F>() == TypeId::of::<f16>();
         let graph_size = &type_name::<F>()[2..];
         let out = match self.kind {
             Kind::Baseline => format!("fp{graph_size}"),
             Kind::Quantized { weight_packing } => {
-                if let WeightPacking::Bit8 = weight_packing {
+                let mut o = if let WeightPacking::Bit8 = weight_packing {
                     String::from("int8")
                 } else {
-                    let mut o = String::from("q4");
-                    if is_half_precision {
-                        o += &format!("_fp{graph_size}");
-                    }
-                    o
+                    String::from("q4")
+                };
+                if TypeId::of::<F>() != TypeId::of::<f32>() {
+                    o += &format!("_fp{graph_size}");
                 }
+                o
             }
         };
         write!(f, "{out}")
