@@ -1,9 +1,13 @@
 use crate::{
     Variant, config,
-    models::{self, ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
+    models::{
+        self, ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder,
+        conditional_decoder, language_model, speech_encoder, token_embedder,
+    },
 };
 use half::f16;
 use ndarray::{concatenate, prelude::*};
+use num_traits::Float;
 use ort::{
     session::{
         Session, SessionInputValue,
@@ -13,6 +17,7 @@ use ort::{
 };
 use std::{fmt::Display, fs, num::NonZero, path::Path};
 use thiserror::Error;
+use tokenizers::Tokenizer;
 use typed_floats::tf32;
 
 #[derive(Debug, Error)]
@@ -27,11 +32,67 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-// Default hyper parameters
-const DEFAULT_SAMPLE_RATE: u32 = 24000;
-const DEFAULT_NUM_KV_HEADS: usize = 16;
-const DEFAULT_HEAD_DIM: usize = 64;
+#[derive(Debug)]
+pub struct Options<F: Float> {
+    pub speech_encoder: speech_encoder::Model,
+    pub token_embedder: token_embedder::Model,
+    pub language_model: language_model::Model<F>,
+    pub conditional_decoder: conditional_decoder::Model,
+    pub sample_rate: u32,
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
+}
 
+impl<F: Float> Default for Options<F> {
+    fn default() -> Self {
+        Self {
+            speech_encoder: speech_encoder::Model::default(),
+            token_embedder: token_embedder::Model::default(),
+            language_model: language_model::Model::default(),
+            conditional_decoder: conditional_decoder::Model::default(),
+            sample_rate: 2400,
+            num_kv_heads: 16,
+            head_dim: 64,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ChatterboxTurbo2<F: Float> {
+    tokenizer: Tokenizer,
+    pub speech_encoder: speech_encoder::Model,
+    pub token_embedder: token_embedder::Model,
+    pub language_model: language_model::Model<F>,
+    pub conditional_decoder: conditional_decoder::Model,
+    pub sample_rate: u32,
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
+}
+
+impl<F: Float> ChatterboxTurbo2<F> {
+    pub fn load() -> Result<Self, Error> {
+        Self::load_with_options(Options::default())
+    }
+
+    pub fn load_with_options(options: Options<F>) -> Result<Self, Error> {
+        let tokenizer = Tokenizer::from_file(
+            config::TOKENIZER_PATH
+                .read()
+                .expect("TOKENIZER_PATH lock poisoned")
+                .clone(),
+        )?;
+        Ok(Self {
+            tokenizer,
+            speech_encoder: options.speech_encoder,
+            token_embedder: options.token_embedder,
+            language_model: options.language_model,
+            conditional_decoder: options.conditional_decoder,
+            sample_rate: options.sample_rate,
+            num_kv_heads: options.num_kv_heads,
+            head_dim: options.head_dim,
+        })
+    }
+}
 #[derive(Debug)]
 pub struct ChatterboxTurbo {
     speech_encoder: SpeechEncoder,

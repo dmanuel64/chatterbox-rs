@@ -6,10 +6,11 @@ edition = "2024"
 [dependencies]
 directories = "6"
 futures = { version = "0.3", optional = true }
-half = "2.1"
+half = { version = "2.1", features = ["num-traits"] }
 hound = "3"
 indicatif = "0.18"
 ndarray = "0.17"
+num-traits = "0.2"
 ort = { version = "2.0.0-rc.13", features = ["half"] }
 rand = "0.10"
 reqwest = { version = "0.13", features = ["stream"], optional = true }
