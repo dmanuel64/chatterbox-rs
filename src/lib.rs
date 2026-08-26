@@ -10,5 +10,5 @@ pub type ChatterboxError = chatterbox_turbo::Error;
 pub use chatterbox_turbo::{
     ChatterboxTurbo, GenerateOptions, LoadOptions, ParalinguisticStrExt, ParalinguisticTag,
 };
-pub use models::Variant;
+pub use models::model;
 pub use ort::session::builder::{AutoDevicePolicy, GraphOptimizationLevel};

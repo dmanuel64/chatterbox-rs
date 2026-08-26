@@ -92,6 +92,23 @@ impl<F: Float> ChatterboxTurbo2<F> {
             head_dim: options.head_dim,
         })
     }
+
+    fn sample_next_token(&self) {
+        // let logits = logits.slice(s![.., -1, ..]).into_dyn();
+        // let next_token_logits =
+        //     repetition_penalty_processor.process(&generate_tokens, logits.to_owned());
+
+        // let last_axis = Axis(next_token_logits.ndim() - 1);
+        // input_ids = next_token_logits
+        //     .map_axis(last_axis, |row| {
+        //         row.iter()
+        //             .enumerate()
+        //             .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        //             .map(|(idx, _)| idx as i64)
+        //             .expect("row should not be empty")
+        //     })
+        //     .insert_axis(last_axis);
+    }
 }
 #[derive(Debug)]
 pub struct ChatterboxTurbo {

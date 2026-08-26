@@ -1,6 +1,7 @@
 use crate::config;
 use half::f16;
 use num_traits::Float;
+use ort::session::Session;
 use std::{
     any::{TypeId, type_name},
     fmt::Display,
@@ -146,6 +147,7 @@ pub trait Metadata<F: Float + 'static> {
 }
 
 pub trait Model<F: Float> {
+    fn session(&self) -> &Session;
     fn metadata(&self) -> Box<dyn Metadata<F>>;
 }
 
