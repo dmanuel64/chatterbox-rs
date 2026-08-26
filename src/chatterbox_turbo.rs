@@ -1,9 +1,6 @@
 use crate::{
-    Variant, config,
-    models::{
-        self, ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder,
-        conditional_decoder, language_model, speech_encoder, token_embedder,
-    },
+    config, model,
+    models::{self, conditional_decoder, language_model, speech_encoder, token_embedder},
 };
 use half::f16;
 use ndarray::{concatenate, prelude::*};
@@ -32,24 +29,45 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-#[derive(Debug)]
-pub struct Options<F: Float> {
-    pub speech_encoder: speech_encoder::Model,
-    pub token_embedder: token_embedder::Model,
-    pub language_model: language_model::Model<F>,
-    pub conditional_decoder: conditional_decoder::Model,
+pub struct Options<S, T, L, C>
+where
+    S: Float,
+    T: Float,
+    L: Float,
+    C: Float,
+{
+    pub speech_encoder: speech_encoder::Metadata<S>,
+    pub speech_encoder_session_builder: Option<SessionBuilder>,
+    pub token_embedder: token_embedder::Metadata<T>,
+    pub token_embedder_session_builder: Option<SessionBuilder>,
+    pub language_model: language_model::Metadata<L>,
+    pub language_model_session_builder: Option<SessionBuilder>,
+    pub conditional_decoder: conditional_decoder::Metadata<C>,
+    pub conditional_decoder_session_builder: Option<SessionBuilder>,
     pub sample_rate: u32,
     pub num_kv_heads: usize,
     pub head_dim: usize,
 }
 
-impl<F: Float> Default for Options<F> {
+impl Default for Options<f32, f32, f32, f32> {
     fn default() -> Self {
         Self {
-            speech_encoder: speech_encoder::Model::default(),
-            token_embedder: token_embedder::Model::default(),
-            language_model: language_model::Model::default(),
-            conditional_decoder: conditional_decoder::Model::default(),
+            speech_encoder: speech_encoder::Metadata {
+                variant: model::Variant::<f32>::INT8,
+            },
+            speech_encoder_session_builder: None,
+            token_embedder: token_embedder::Metadata {
+                variant: model::Variant::<f32>::INT8,
+            },
+            token_embedder_session_builder: None,
+            language_model: language_model::Metadata {
+                variant: model::Variant::<f32>::INT8,
+            },
+            language_model_session_builder: None,
+            conditional_decoder: conditional_decoder::Metadata {
+                variant: model::Variant::<f32>::INT8,
+            },
+            conditional_decoder_session_builder: None,
             sample_rate: 2400,
             num_kv_heads: 16,
             head_dim: 64,
@@ -58,18 +76,30 @@ impl<F: Float> Default for Options<F> {
 }
 
 #[derive(Debug)]
-pub struct ChatterboxTurbo2<F: Float> {
+pub struct ChatterboxTurbo2<S, T, L, C>
+where
+    S: Float,
+    T: Float,
+    L: Float,
+    C: Float,
+{
     tokenizer: Tokenizer,
-    pub speech_encoder: speech_encoder::Model,
-    pub token_embedder: token_embedder::Model,
-    pub language_model: language_model::Model<F>,
-    pub conditional_decoder: conditional_decoder::Model,
+    pub speech_encoder: speech_encoder::Model<S>,
+    pub token_embedder: token_embedder::Model<T>,
+    pub language_model: language_model::Model<L>,
+    pub conditional_decoder: conditional_decoder::Model<C>,
     pub sample_rate: u32,
     pub num_kv_heads: usize,
     pub head_dim: usize,
 }
 
-impl<F: Float> ChatterboxTurbo2<F> {
+impl<S, T, L, C> ChatterboxTurbo2<S, T, L, C>
+where
+    S: Float,
+    T: Float,
+    L: Float,
+    C: Float,
+{
     pub fn load() -> Result<Self, Error> {
         Self::load_with_options(Options::default())
     }

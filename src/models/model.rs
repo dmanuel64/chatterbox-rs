@@ -10,18 +10,6 @@ use std::{
 };
 use thiserror::Error;
 
-pub const FP32: Variant<f32> = Variant::new_inner(Kind::Baseline);
-pub const FP16: Variant<f16> = Variant::new_inner(Kind::Baseline);
-pub const INT8: Variant<f32> = Variant::new_inner(Kind::Quantized {
-    weight_packing: WeightPacking::Bit8,
-});
-pub const Q4: Variant<f32> = Variant::new_inner(Kind::Quantized {
-    weight_packing: WeightPacking::Bit4,
-});
-pub const Q4_FP16: Variant<f16> = Variant::new_inner(Kind::Quantized {
-    weight_packing: WeightPacking::Bit4,
-});
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("incompatible model variant: TODO")]
@@ -61,9 +49,26 @@ pub struct Variant<F: Float> {
     _phanton: PhantomData<F>,
 }
 
+impl Variant<f32> {
+    pub const FP32: Self = Self::new_inner(Kind::Baseline);
+    pub const INT8: Self = Self::new_inner(Kind::Quantized {
+        weight_packing: WeightPacking::Bit8,
+    });
+    pub const Q4: Self = Self::new_inner(Kind::Quantized {
+        weight_packing: WeightPacking::Bit4,
+    });
+}
+
+impl Variant<f16> {
+    pub const FP16: Variant<f16> = Variant::new_inner(Kind::Baseline);
+    pub const Q4_FP16: Variant<f16> = Variant::new_inner(Kind::Quantized {
+        weight_packing: WeightPacking::Bit4,
+    });
+}
+
 impl<F: Float + 'static> Variant<F> {
     #[cfg(feature = "custom-variants")]
-    const fn new(kind: Kind) -> Self {
+    pub const fn new(kind: Kind) -> Self {
         Self::new_inner(kind)
     }
 

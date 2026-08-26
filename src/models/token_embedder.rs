@@ -1,5 +1,6 @@
 use crate::models::model::{self, Metadata as BaseMetadata};
 use ndarray::ArrayD;
+use num_traits::Float;
 use ort::{
     session::{Session, builder::SessionBuilder},
     value::Tensor,
@@ -7,42 +8,45 @@ use ort::{
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Metadata {
-    pub variant: model::Variant<f32>,
+pub struct Metadata<F: Float> {
+    pub variant: model::Variant<F>,
 }
 
-impl model::Metadata<f32> for Metadata {
+impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
     fn filename_prefix(&self) -> &'static str {
         "embed_tokens"
     }
 
-    fn variant(&self) -> model::Variant<f32> {
+    fn variant(&self) -> model::Variant<F> {
         self.variant
     }
 }
 
 #[derive(Debug)]
-pub struct Model {
-    metadata: Metadata,
+pub struct Model<F: Float> {
+    metadata: Metadata<F>,
     session: Session,
 }
 
-impl model::Model<f32> for Model {
+impl<F: Float + 'static> model::Model<F> for Model<F> {
     fn session(&self) -> &Session {
         &self.session
     }
 
-    fn metadata(&self) -> Box<dyn model::Metadata<f32>> {
+    fn metadata(&self) -> Box<dyn model::Metadata<F>> {
         Box::new(self.metadata)
     }
 }
 
-impl Model {
-    pub fn load(metadata: Metadata) -> Result<Self, Error> {
+impl<F: Float> Model<F> {
+    pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
-    pub fn load_with_builder(metadata: Metadata, builder: SessionBuilder) -> Result<Self, Error> {
+    pub fn load_with_builder(
+        metadata: Metadata<F>,
+        builder: SessionBuilder,
+    ) -> Result<Self, model::Error> {
         Ok(Self {
             metadata,
             session: builder.commit_from_file(metadata.graph_file())?,

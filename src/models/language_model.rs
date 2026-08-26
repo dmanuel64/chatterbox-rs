@@ -36,14 +36,14 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
 }
 
 impl<F: Float> Model<F> {
-    pub fn load(metadata: Metadata<F>) -> Result<Self, Error> {
+    pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
         metadata: Metadata<F>,
         builder: SessionBuilder,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, model::Error> {
         Ok(Self {
             metadata,
             session: builder.commit_from_file(metadata.graph_file())?,
@@ -60,7 +60,7 @@ impl<F: Float> Model<F> {
         //     past_key_values.push((
         //         input.name().to_string(),
         //         outlet_is_fp16(input),
-        //         Array4::<f32>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
+        //         Array4::<F>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
         //     ));
         // }
     }
