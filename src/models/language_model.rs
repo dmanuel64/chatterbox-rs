@@ -23,6 +23,7 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 pub struct Model<F: Float> {
     metadata: Metadata<F>,
     session: Session,
+    past_key_values: Vec<(String, Array4<F>)>,
 }
 
 impl<F: Float + 'static> model::Model<F> for Model<F> {
@@ -47,36 +48,30 @@ impl<F: Float> Model<F> {
         Ok(Self {
             metadata,
             session: builder.commit_from_file(metadata.graph_file())?,
+            past_key_values: Vec::new(),
         })
     }
 
-    pub(crate) fn init_past_key_values(&self) {
-        // for input in self
-        //     .language_model_session
-        //     .inputs()
-        //     .iter()
-        //     .filter(|i| i.name().contains("past_key_values"))
-        // {
-        //     past_key_values.push((
-        //         input.name().to_string(),
-        //         outlet_is_fp16(input),
-        //         Array4::<F>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
-        //     ));
-        // }
+    pub(crate) fn init_past_key_values(&mut self) {
+        for input in self
+            .session
+            .inputs()
+            .iter()
+            .filter(|i| i.name().contains("past_key_values"))
+        {
+            self.past_key_values.push((
+                input.name().to_string(),
+                Array4::<F>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
+            ));
+        }
     }
 
     pub(crate) fn init_mask(&self) {
-        // for input in self
-        //     .session
-        //     .inputs()
-        //     .iter()
-        //     .filter(|i| i.name().contains("past_key_values"))
-        // {
-        //     past_key_values.push((
-        //         input.name().to_string(),
-        //         Array4::<f32>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
-        //     ));
-        // }
+        // attention_mask = Array::ones(Ix2(batch_size, seq_len));
+        // position_ids = Array::from_iter(0..seq_len as i64)
+        //     .broadcast((batch_size, seq_len))
+        //     .expect("broadcast should not fail")
+        //     .to_owned();
     }
 
     pub(crate) fn step_language_model(&self) {
