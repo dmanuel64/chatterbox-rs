@@ -11,9 +11,10 @@ use thiserror::Error;
 use tokio::{fs::File, io::AsyncWriteExt};
 
 use crate::{
-    Variant, config,
-    models::{ConditionalDecoder, LanguageModel, Model, SpeechEncoder, TokenEmbedder},
+    config, model,
+    models::{conditional_decoder, language_model, speech_encoder, token_embedder},
 };
+use num_traits::Float;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -227,7 +228,10 @@ async fn download_chatterbot_files(
         .await
 }
 
-fn onnx_targets(files: &[Box<dyn Model>], force: bool) -> Vec<SourceDest> {
+fn onnx_targets<F: Float + 'static>(
+    files: &[Box<dyn model::Metadata<F>>],
+    force: bool,
+) -> Vec<SourceDest> {
     let mut targets = Vec::with_capacity(files.len() * 2);
     for m in files {
         let graph_dest = m.graph_file();
@@ -260,8 +264,8 @@ fn onnx_targets(files: &[Box<dyn Model>], force: bool) -> Vec<SourceDest> {
     targets
 }
 
-async fn download_onnx_files(
-    files: &[Box<dyn Model>],
+async fn download_onnx_files<F: Float + 'static>(
+    files: &[Box<dyn model::Metadata<F>>],
     force: bool,
     use_patched_models: bool,
 ) -> Result<(), Error> {
@@ -269,21 +273,21 @@ async fn download_onnx_files(
     download_chatterbot_files(&targets, use_patched_models).await
 }
 
-pub async fn download_model(
-    variant: Variant,
+pub async fn download_model<F: Float + 'static>(
+    variant: model::Variant<F>,
     force: bool,
     use_patched_models: bool,
 ) -> Result<(), Error> {
-    let encoder = SpeechEncoder { variant };
-    let embedder = TokenEmbedder { variant };
-    let model = LanguageModel { variant };
-    let decoder = ConditionalDecoder { variant };
+    let encoder = speech_encoder::Metadata::<F> { variant };
+    let embedder = token_embedder::Metadata::<F> { variant };
+    let lm = language_model::Metadata::<F> { variant };
+    let decoder = conditional_decoder::Metadata::<F> { variant };
     download_onnx_files(
         &[
-            Box::new(encoder.clone()),
-            Box::new(embedder.clone()),
-            Box::new(model.clone()),
-            Box::new(decoder.clone()),
+            Box::new(encoder) as Box<dyn model::Metadata<F>>,
+            Box::new(embedder),
+            Box::new(lm),
+            Box::new(decoder),
         ],
         force,
         use_patched_models,
@@ -308,17 +312,20 @@ pub async fn download_tokenizer(force: bool, use_patched_models: bool) -> Result
     download_chatterbot_files(&targets, use_patched_models).await
 }
 
-pub async fn download_missing(variant: Variant, use_patched_models: bool) -> Result<(), Error> {
-    let encoder = SpeechEncoder { variant };
-    let embedder = TokenEmbedder { variant };
-    let model = LanguageModel { variant };
-    let decoder = ConditionalDecoder { variant };
+pub async fn download_missing<F: Float + 'static>(
+    variant: model::Variant<F>,
+    use_patched_models: bool,
+) -> Result<(), Error> {
+    let encoder = speech_encoder::Metadata::<F> { variant };
+    let embedder = token_embedder::Metadata::<F> { variant };
+    let lm = language_model::Metadata::<F> { variant };
+    let decoder = conditional_decoder::Metadata::<F> { variant };
     let mut targets: Vec<_> = onnx_targets(
         &[
-            Box::new(encoder.clone()),
-            Box::new(embedder.clone()),
-            Box::new(model.clone()),
-            Box::new(decoder.clone()),
+            Box::new(encoder) as Box<dyn model::Metadata<F>>,
+            Box::new(embedder),
+            Box::new(lm),
+            Box::new(decoder),
         ],
         false,
     );

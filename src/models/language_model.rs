@@ -1,7 +1,11 @@
 use crate::models::model::{self, Metadata as BaseMetadata};
-use ndarray::{Array4, Ix4};
+use ndarray::{Array, Array2, Array4, ArrayD, Ix4};
 use num_traits::Float;
-use ort::session::{Session, builder::SessionBuilder};
+use ort::{
+    session::{Session, builder::SessionBuilder},
+    value::{PrimitiveTensorElementType, Tensor},
+};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -23,6 +27,11 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 pub struct Model<F: Float> {
     metadata: Metadata<F>,
     session: Session,
+    num_kv_heads: usize,
+    head_dim: usize,
+    // Native `F` — the KV cache is the only part of this graph confirmed to ever vary from
+    // `float32` (depending on variant), so this is the one tensor pair actually worth being
+    // generic over; everything else (`inputs_embeds`/`logits`) is hardcoded `f32` below.
     past_key_values: Vec<(String, Array4<F>)>,
 }
 
@@ -36,23 +45,35 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
     }
 }
 
-impl<F: Float> Model<F> {
-    pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
-        Self::load_with_builder(metadata, Session::builder()?)
+impl<F: Float + PrimitiveTensorElementType + Debug + 'static> Model<F> {
+    pub fn load(
+        metadata: Metadata<F>,
+        num_kv_heads: usize,
+        head_dim: usize,
+    ) -> Result<Self, model::Error> {
+        Self::load_with_builder(metadata, Session::builder()?, num_kv_heads, head_dim)
     }
 
     pub fn load_with_builder(
         metadata: Metadata<F>,
-        builder: SessionBuilder,
+        mut builder: SessionBuilder,
+        num_kv_heads: usize,
+        head_dim: usize,
     ) -> Result<Self, model::Error> {
         Ok(Self {
             metadata,
             session: builder.commit_from_file(metadata.graph_file())?,
+            num_kv_heads,
+            head_dim,
             past_key_values: Vec::new(),
         })
     }
 
-    pub(crate) fn init_past_key_values(&mut self) {
+    /// Discovers this graph's `past_key_values.*` inputs and seeds each with a zero-length cache
+    /// tensor. Done by inspecting `session.inputs()` rather than hardcoding a layer count, so this
+    /// stays correct regardless of how many layers a given variant's graph actually has.
+    pub(crate) fn init_past_key_values(&mut self, batch_size: usize) {
+        self.past_key_values.clear();
         for input in self
             .session
             .inputs()
@@ -66,36 +87,46 @@ impl<F: Float> Model<F> {
         }
     }
 
-    pub(crate) fn init_mask(&self) {
-        // attention_mask = Array::ones(Ix2(batch_size, seq_len));
-        // position_ids = Array::from_iter(0..seq_len as i64)
-        //     .broadcast((batch_size, seq_len))
-        //     .expect("broadcast should not fail")
-        //     .to_owned();
+    /// Initializes `attention_mask` (all ones — nothing is padded/masked at the start of
+    /// generation) and `position_ids` (`0..seq_len` broadcast across the batch) for the very first
+    /// autoregressive step.
+    pub(crate) fn init_mask(batch_size: usize, seq_len: usize) -> (Array2<i64>, Array2<i64>) {
+        let attention_mask = Array2::ones((batch_size, seq_len));
+        let position_ids = Array::from_iter(0..seq_len as i64)
+            .broadcast((batch_size, seq_len))
+            .expect("broadcast should not fail")
+            .to_owned();
+        (attention_mask, position_ids)
     }
 
-    pub(crate) fn step_language_model(&self) {
-        // let mut language_model_inputs = ort::inputs![
-        //     "inputs_embeds" => float_input(input_embeds, self.language_model_inputs_embeds_fp16)?,
-        //     "attention_mask" => Tensor::from_array(attention_mask.clone())?,
-        //     "position_ids" => Tensor::from_array(position_ids.clone())?,
-        // ];
-        // for (name, fp16, kv) in &past_key_values {
-        //     language_model_inputs.push((name.as_str().into(), float_input(kv.clone(), *fp16)?));
-        // }
-        // let language_model_outputs = self.language_model_session.run(language_model_inputs)?;
-        // let logits =
-        //     extract_f32_array(&language_model_outputs[0], self.language_model_logits_fp16)?;
-        // let present_key_values: Vec<Array4<f32>> = language_model_outputs
-        //     .values()
-        //     .skip(1)
-        //     .zip(past_key_values.iter())
-        //     .map(|(v, (_, fp16, _))| {
-        //         extract_f32_array(&v, *fp16).map(|a| {
-        //             a.into_dimensionality::<Ix4>()
-        //                 .expect("KV cache tensor should be 4D")
-        //         })
-        //     })
-        //     .collect::<Result<_, _>>()?;
+    /// Runs one autoregressive step. `inputs_embeds`/`logits` are hardcoded `f32` regardless of
+    /// `F` — confirmed empirically that this graph's KV cache is the only part of `language_model`
+    /// that ever varies from `float32`, for every variant checked. The KV cache itself is updated
+    /// in place from this step's `present_key_values` output, so callers don't need to manage it.
+    pub(crate) fn step_language_model(
+        &mut self,
+        inputs_embeds: ArrayD<f32>,
+        attention_mask: &Array2<i64>,
+        position_ids: &Array2<i64>,
+    ) -> Result<ArrayD<f32>, model::Error> {
+        let mut inputs = ort::inputs![
+            "inputs_embeds" => Tensor::from_array(inputs_embeds)?,
+            "attention_mask" => Tensor::from_array(attention_mask.clone())?,
+            "position_ids" => Tensor::from_array(position_ids.clone())?,
+        ];
+        for (name, kv) in &self.past_key_values {
+            inputs.push((name.as_str().into(), Tensor::from_array(kv.clone())?.into()));
+        }
+
+        let outputs = self.session.run(inputs)?;
+        let logits = outputs[0].try_extract_array::<f32>()?.into_owned();
+        for ((_, kv), present) in self.past_key_values.iter_mut().zip(outputs.values().skip(1)) {
+            *kv = present
+                .try_extract_array::<F>()?
+                .into_owned()
+                .into_dimensionality::<Ix4>()
+                .expect("KV cache tensor should be 4D");
+        }
+        Ok(logits)
     }
 }

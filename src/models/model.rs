@@ -2,18 +2,15 @@ use crate::config;
 use half::f16;
 use num_traits::Float;
 use ort::session::Session;
-use std::{
-    any::{TypeId, type_name},
-    fmt::Display,
-    marker::PhantomData,
-    path::PathBuf,
-};
+use std::{any::TypeId, fmt::Display, marker::PhantomData, mem::size_of, path::PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("incompatible model variant: TODO")]
     IncompatibleVariant { kind: Kind, float_type: TypeId },
+    #[error("An ONNX runtime error occurred: {0}")]
+    Onnx(#[from] ort::Error),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,7 +77,7 @@ impl<F: Float + 'static> Variant<F> {
     }
 
     fn filename_suffix(&self) -> String {
-        let graph_size = &type_name::<F>()[2..];
+        let graph_size = size_of::<F>() * 8;
         let float_type = TypeId::of::<F>();
         match self.kind {
             Kind::Baseline => {
@@ -107,7 +104,7 @@ impl<F: Float + 'static> Variant<F> {
 
 impl<F: Float + 'static> Display for Variant<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let graph_size = &type_name::<F>()[2..];
+        let graph_size = size_of::<F>() * 8;
         let out = match self.kind {
             Kind::Baseline => format!("fp{graph_size}"),
             Kind::Quantized { weight_packing } => {

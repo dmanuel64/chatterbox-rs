@@ -1,7 +1,24 @@
+use ndarray::ArrayD;
 use num_traits::Float;
-use ort::session::{Session, builder::SessionBuilder};
+use ort::{
+    session::{Session, builder::SessionBuilder},
+    value::Tensor,
+};
 
 use crate::models::model::{self, Metadata as BaseMetadata};
+
+/// The four outputs of `speech_encoder.onnx`, read positionally — the exported graph doesn't have
+/// stable output names. All four are `float32` regardless of variant (confirmed empirically: even
+/// the `_fp16`/`_q4f16` files keep this graph's boundary entirely `float32`), so this struct is not
+/// generic over `F` — `F` only selects which file gets loaded.
+pub(crate) struct ReferenceAudioEncoding {
+    /// T3 conditioning embedding, prepended to the text embedding stream.
+    pub condition_embeddings: ArrayD<f32>,
+    /// The reference clip's own speech tokens, prepended to the generated ones in `decode_audio`.
+    pub prompt_token: ArrayD<i64>,
+    pub speaker_embeddings: ArrayD<f32>,
+    pub speaker_features: ArrayD<f32>,
+}
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -35,14 +52,14 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
     }
 }
 
-impl<F: Float> Model<F> {
+impl<F: Float + 'static> Model<F> {
     pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
         metadata: Metadata<F>,
-        builder: SessionBuilder,
+        mut builder: SessionBuilder,
     ) -> Result<Self, model::Error> {
         Ok(Self {
             metadata,
@@ -50,26 +67,18 @@ impl<F: Float> Model<F> {
         })
     }
 
-    pub(crate) fn encode_reference_audio(&self) {
-        // let ort_speech_encoder_input = ort::inputs![
-        //     "audio_values" => float_input(
-        //         audio_values.clone(),
-        //         self.speech_encoder_audio_values_fp16
-        //     )?
-        // ];
-        // let speech_encoder_outputs = self.speech_encoder_session.run(ort_speech_encoder_input)?;
-        // let condition_embeddings = extract_f32_array(
-        //     &speech_encoder_outputs[0],
-        //     self.speech_encoder_condition_embeddings_fp16,
-        // )?;
-        // prompt_token = Some(speech_encoder_outputs[1].try_extract_array()?.to_owned());
-        // speaker_embeddings = Some(extract_f32_array(
-        //     &speech_encoder_outputs[2],
-        //     self.speech_encoder_speaker_embeddings_fp16,
-        // )?);
-        // speaker_features = Some(extract_f32_array(
-        //     &speech_encoder_outputs[3],
-        //     self.speech_encoder_speaker_features_fp16,
-        // )?);
+    pub(crate) fn encode_reference_audio(
+        &mut self,
+        audio_values: ArrayD<f32>,
+    ) -> Result<ReferenceAudioEncoding, model::Error> {
+        let outputs = self
+            .session
+            .run(ort::inputs!["audio_values" => Tensor::from_array(audio_values)?])?;
+        Ok(ReferenceAudioEncoding {
+            condition_embeddings: outputs[0].try_extract_array::<f32>()?.into_owned(),
+            prompt_token: outputs[1].try_extract_array::<i64>()?.into_owned(),
+            speaker_embeddings: outputs[2].try_extract_array::<f32>()?.into_owned(),
+            speaker_features: outputs[3].try_extract_array::<f32>()?.into_owned(),
+        })
     }
 }

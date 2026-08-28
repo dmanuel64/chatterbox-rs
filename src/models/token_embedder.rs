@@ -38,14 +38,14 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
     }
 }
 
-impl<F: Float> Model<F> {
+impl<F: Float + 'static> Model<F> {
     pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
         metadata: Metadata<F>,
-        builder: SessionBuilder,
+        mut builder: SessionBuilder,
     ) -> Result<Self, model::Error> {
         Ok(Self {
             metadata,
@@ -53,7 +53,10 @@ impl<F: Float> Model<F> {
         })
     }
 
-    pub(crate) fn embed_tokens(&mut self, input_ids: ArrayD<f32>) -> Result<ArrayD<f32>, Error> {
+    pub(crate) fn embed_tokens(
+        &mut self,
+        input_ids: ArrayD<i64>,
+    ) -> Result<ArrayD<f32>, model::Error> {
         let outputs = self.session.run(ort::inputs![
             "input_ids" => Tensor::from_array(input_ids)?
         ])?;

@@ -1,7 +1,15 @@
+use ndarray::{ArrayD, ArrayRefD, Axis, Ix2, concatenate, prelude::*};
 use num_traits::Float;
-use ort::session::{Session, builder::SessionBuilder};
+use ort::{
+    session::{Session, builder::SessionBuilder},
+    value::Tensor,
+};
 
 use crate::models::model::{self, Metadata as BaseMetadata};
+
+/// Speech-token id `conditional_decoder.onnx` expects appended as trailing silence padding after
+/// the real generated speech tokens.
+const SILENCE_TOKEN: i64 = 4299;
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -35,14 +43,14 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
     }
 }
 
-impl<F: Float> Model<F> {
+impl<F: Float + 'static> Model<F> {
     pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
         metadata: Metadata<F>,
-        builder: SessionBuilder,
+        mut builder: SessionBuilder,
     ) -> Result<Self, model::Error> {
         Ok(Self {
             metadata,
@@ -50,26 +58,29 @@ impl<F: Float> Model<F> {
         })
     }
 
-    pub(crate) fn decode_audio(&mut self) {
-        // let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
-        // let silence_tokens =
-        //     Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), Self::SILENCE_TOKEN)
-        //         .into_dyn();
-        // let speech_tokens = concatenate![Axis(1), prompt_token, speech_tokens, silence_tokens];
+    /// `generate_tokens` is the full running sequence including the seed `START_SPEECH_TOKEN` and
+    /// trailing `STOP_SPEECH_TOKEN` — both get sliced off here, leaving only the real generated
+    /// speech tokens, which get prepended with `prompt_token` (the reference clip's own speech
+    /// tokens) and padded with a few trailing silence tokens before decoding.
+    pub(crate) fn decode_audio(
+        &mut self,
+        prompt_token: ArrayD<i64>,
+        generate_tokens: &ArrayRefD<i64>,
+        speaker_embeddings: ArrayD<f32>,
+        speaker_features: ArrayD<f32>,
+    ) -> Result<ArrayD<f32>, model::Error> {
+        let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
+        let silence_tokens =
+            Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
+        let speech_tokens = concatenate![Axis(1), prompt_token, speech_tokens, silence_tokens];
 
-        // let output = self.conditional_decoder_session.run(ort::inputs![
-        //     "speech_tokens" => Tensor::from_array(speech_tokens)?,
-        //     "speaker_embeddings" => float_input(
-        //         speaker_embeddings,
-        //         self.conditional_decoder_speaker_embeddings_fp16
-        //     )?,
-        //     "speaker_features" => float_input(
-        //         speaker_features,
-        //         self.conditional_decoder_speaker_features_fp16
-        //     )?
-        // ])?;
-        // // TODO: they have it as squeeze(axis=0)
-        // let wav = extract_f32_array(&output[0], self.conditional_decoder_wav_fp16)?.squeeze();
-        // Ok(wav.to_owned())
+        let outputs = self.session.run(ort::inputs![
+            "speech_tokens" => Tensor::from_array(speech_tokens)?,
+            "speaker_embeddings" => Tensor::from_array(speaker_embeddings)?,
+            "speaker_features" => Tensor::from_array(speaker_features)?
+        ])?;
+        // TODO: they have it as squeeze(axis=0)
+        let wav = outputs[0].try_extract_array::<f32>()?.squeeze();
+        Ok(wav.to_owned())
     }
 }
