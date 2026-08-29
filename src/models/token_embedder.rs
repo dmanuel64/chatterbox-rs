@@ -1,4 +1,4 @@
-use crate::models::model::{self, Metadata as BaseMetadata};
+use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 use ndarray::ArrayD;
 use num_traits::Float;
 use ort::{
@@ -23,28 +23,28 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 }
 
 #[derive(Debug)]
-pub struct Model<F: Float> {
-    metadata: Metadata<F>,
+pub struct Model<P: RestrictedPrecision> {
+    metadata: Metadata<P>,
     session: Session,
 }
 
-impl<F: Float + 'static> model::Model<F> for Model<F> {
+impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
     fn session(&self) -> &Session {
         &self.session
     }
 
-    fn metadata(&self) -> Box<dyn model::Metadata<F>> {
+    fn metadata(&self) -> Box<dyn model::Metadata<P>> {
         Box::new(self.metadata)
     }
 }
 
-impl<F: Float + 'static> Model<F> {
-    pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
+impl<P: RestrictedPrecision> Model<P> {
+    pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
-        metadata: Metadata<F>,
+        metadata: Metadata<P>,
         mut builder: SessionBuilder,
     ) -> Result<Self, model::Error> {
         Ok(Self {
@@ -56,11 +56,11 @@ impl<F: Float + 'static> Model<F> {
     pub(crate) fn embed_tokens(
         &mut self,
         input_ids: ArrayD<i64>,
-    ) -> Result<ArrayD<f32>, model::Error> {
+    ) -> Result<ArrayD<P>, model::Error> {
         let outputs = self.session.run(ort::inputs![
             "input_ids" => Tensor::from_array(input_ids)?
         ])?;
-        let output = outputs[0].try_extract_array::<f32>()?;
+        let output = outputs[0].try_extract_array::<P>()?;
         Ok(output.into_owned())
     }
 }

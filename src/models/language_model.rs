@@ -1,11 +1,10 @@
-use crate::models::model::{self, Metadata as BaseMetadata};
+use crate::models::model::{self, Metadata as BaseMetadata, Precision};
 use ndarray::{Array, Array2, Array4, ArrayD, Ix4};
 use num_traits::Float;
 use ort::{
     session::{Session, builder::SessionBuilder},
-    value::{PrimitiveTensorElementType, Tensor},
+    value::Tensor,
 };
-use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -45,9 +44,9 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
     }
 }
 
-impl<F: Float + PrimitiveTensorElementType + Debug + 'static> Model<F> {
+impl<P: Precision> Model<P> {
     pub fn load(
-        metadata: Metadata<F>,
+        metadata: Metadata<P>,
         num_kv_heads: usize,
         head_dim: usize,
     ) -> Result<Self, model::Error> {
@@ -55,7 +54,7 @@ impl<F: Float + PrimitiveTensorElementType + Debug + 'static> Model<F> {
     }
 
     pub fn load_with_builder(
-        metadata: Metadata<F>,
+        metadata: Metadata<P>,
         mut builder: SessionBuilder,
         num_kv_heads: usize,
         head_dim: usize,
@@ -82,7 +81,7 @@ impl<F: Float + PrimitiveTensorElementType + Debug + 'static> Model<F> {
         {
             self.past_key_values.push((
                 input.name().to_string(),
-                Array4::<F>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
+                Array4::<P>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
             ));
         }
     }
@@ -100,7 +99,7 @@ impl<F: Float + PrimitiveTensorElementType + Debug + 'static> Model<F> {
     }
 
     /// Runs one autoregressive step. `inputs_embeds`/`logits` are hardcoded `f32` regardless of
-    /// `F` — confirmed empirically that this graph's KV cache is the only part of `language_model`
+    /// `P` — confirmed empirically that this graph's KV cache is the only part of `language_model`
     /// that ever varies from `float32`, for every variant checked. The KV cache itself is updated
     /// in place from this step's `present_key_values` output, so callers don't need to manage it.
     pub(crate) fn step_language_model(
@@ -122,7 +121,7 @@ impl<F: Float + PrimitiveTensorElementType + Debug + 'static> Model<F> {
         let logits = outputs[0].try_extract_array::<f32>()?.into_owned();
         for ((_, kv), present) in self.past_key_values.iter_mut().zip(outputs.values().skip(1)) {
             *kv = present
-                .try_extract_array::<F>()?
+                .try_extract_array::<P>()?
                 .into_owned()
                 .into_dimensionality::<Ix4>()
                 .expect("KV cache tensor should be 4D");

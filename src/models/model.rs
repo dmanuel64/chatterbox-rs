@@ -1,8 +1,14 @@
 use crate::config;
 use half::f16;
-use num_traits::Float;
-use ort::session::Session;
-use std::{any::TypeId, fmt::Display, marker::PhantomData, mem::size_of, path::PathBuf};
+use num_traits::{Float, FromPrimitive};
+use ort::{session::Session, value::PrimitiveTensorElementType};
+use std::{
+    any::TypeId,
+    fmt::{Debug, Display},
+    marker::PhantomData,
+    mem::size_of,
+    path::PathBuf,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -161,4 +167,53 @@ impl<F: Float + 'static> Display for dyn Model<F> {
         let variant = self.metadata().variant();
         write!(f, "{variant}")
     }
+}
+
+// The float types ONNX Runtime can actually build a tensor from — every real model's generic
+// bound needs at least this much, so it's pulled out once rather than spelled out at every site.
+trait_set::trait_set! {
+    pub trait Precision = Float + PrimitiveTensorElementType + Debug + 'static;
+}
+
+// A precision a model's own activation tensors (as opposed to its internally-quantized weights)
+// can actually be constructed as. Applies to models that would otherwise have `f32` hardcoded —
+// `speech_encoder`, `token_embedder`, `conditional_decoder` — since their official exported
+// graphs only ever have `float32` tensors at the boundary; `language_model` isn't restricted by
+// this (it's bounded by [`Precision`] directly), since its KV cache already needs real `float16`
+// support unconditionally.
+//
+// Without `custom-variants`, only `f32` implements this — matching what the official graphs
+// actually are. With `custom-variants`, this widens to any [`Precision`], same as `Variant::new`
+// widens to accept any such type — so a hand-exported custom graph with activations in `f16`,
+// `f64`, or any other supported width can be used directly.
+#[cfg(feature = "custom-variants")]
+trait_set::trait_set! {
+    /// A precision a model's own activation tensors can actually be constructed as. See the
+    /// module-level comment above this item for the full explanation.
+    pub trait RestrictedPrecision = Precision + FromPrimitive;
+}
+
+#[cfg(not(feature = "custom-variants"))]
+/// A precision a model's own activation tensors can actually be constructed as. See the
+/// module-level comment above this item for the full explanation.
+pub trait RestrictedPrecision: Precision + FromPrimitive {}
+#[cfg(not(feature = "custom-variants"))]
+impl RestrictedPrecision for f32 {}
+
+/// Converts an array of any [`RestrictedPrecision`] to `f32`, for combining tensors from two
+/// components whose own activation types may differ (e.g. `speech_encoder`'s `S` and
+/// `token_embedder`'s `T`) before handing them to a component with a fixed, proven dtype
+/// requirement of its own (`language_model`'s `inputs_embeds`, always `f32` regardless of variant).
+pub fn to_f32<F: num_traits::ToPrimitive + Clone, D: ndarray::Dimension>(
+    array: ndarray::Array<F, D>,
+) -> ndarray::Array<f32, D> {
+    array.mapv(|x| x.to_f32().expect("value should be representable as f32"))
+}
+
+/// The inverse of [`to_f32`] — converts `f32` back into whatever [`RestrictedPrecision`] a
+/// downstream component's own tensors actually need.
+pub fn from_f32<F: num_traits::FromPrimitive, D: ndarray::Dimension>(
+    array: ndarray::Array<f32, D>,
+) -> ndarray::Array<F, D> {
+    array.mapv(|x| F::from_f32(x).expect("value should be representable as F"))
 }

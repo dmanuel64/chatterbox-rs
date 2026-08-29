@@ -333,3 +333,42 @@ pub async fn download_missing<F: Float + 'static>(
     download_chatterbot_files(&targets, use_patched_models).await?;
     Ok(())
 }
+
+/// Like [`download_missing`], but lets `language_model` use a different variant/precision from
+/// `speech_encoder`/`token_embedder`/`conditional_decoder` — useful when only `language_model`'s
+/// precision is meant to vary (e.g. because the other three are restricted to `f32` without the
+/// `custom-variants` feature). Downloads each component's own files exactly once, rather than
+/// calling [`download_missing`] twice and fetching both variants' copies of the fixed components.
+pub async fn download_missing_split<S: Float + 'static, L: Float + 'static>(
+    non_language_model_variant: model::Variant<S>,
+    language_model_variant: model::Variant<L>,
+    use_patched_models: bool,
+) -> Result<(), Error> {
+    let encoder = speech_encoder::Metadata::<S> {
+        variant: non_language_model_variant,
+    };
+    let embedder = token_embedder::Metadata::<S> {
+        variant: non_language_model_variant,
+    };
+    let decoder = conditional_decoder::Metadata::<S> {
+        variant: non_language_model_variant,
+    };
+    let lm = language_model::Metadata::<L> {
+        variant: language_model_variant,
+    };
+    let mut targets = onnx_targets(
+        &[
+            Box::new(encoder) as Box<dyn model::Metadata<S>>,
+            Box::new(embedder),
+            Box::new(decoder),
+        ],
+        false,
+    );
+    targets.extend(onnx_targets(
+        &[Box::new(lm) as Box<dyn model::Metadata<L>>],
+        false,
+    ));
+    targets.push(tokenizer_target(false));
+    download_chatterbot_files(&targets, use_patched_models).await?;
+    Ok(())
+}

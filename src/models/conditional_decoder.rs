@@ -5,7 +5,7 @@ use ort::{
     value::Tensor,
 };
 
-use crate::models::model::{self, Metadata as BaseMetadata};
+use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 
 /// Speech-token id `conditional_decoder.onnx` expects appended as trailing silence padding after
 /// the real generated speech tokens.
@@ -28,28 +28,28 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 }
 
 #[derive(Debug)]
-pub struct Model<F: Float> {
-    metadata: Metadata<F>,
+pub struct Model<P: RestrictedPrecision> {
+    metadata: Metadata<P>,
     session: Session,
 }
 
-impl<F: Float + 'static> model::Model<F> for Model<F> {
+impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
     fn session(&self) -> &Session {
         &self.session
     }
 
-    fn metadata(&self) -> Box<dyn model::Metadata<F>> {
+    fn metadata(&self) -> Box<dyn model::Metadata<P>> {
         Box::new(self.metadata)
     }
 }
 
-impl<F: Float + 'static> Model<F> {
-    pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
+impl<P: RestrictedPrecision> Model<P> {
+    pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
-        metadata: Metadata<F>,
+        metadata: Metadata<P>,
         mut builder: SessionBuilder,
     ) -> Result<Self, model::Error> {
         Ok(Self {
@@ -66,9 +66,9 @@ impl<F: Float + 'static> Model<F> {
         &mut self,
         prompt_token: ArrayD<i64>,
         generate_tokens: &ArrayRefD<i64>,
-        speaker_embeddings: ArrayD<f32>,
-        speaker_features: ArrayD<f32>,
-    ) -> Result<ArrayD<f32>, model::Error> {
+        speaker_embeddings: ArrayD<P>,
+        speaker_features: ArrayD<P>,
+    ) -> Result<ArrayD<P>, model::Error> {
         let speech_tokens = generate_tokens.slice(s![.., 1..-1]).into_dyn();
         let silence_tokens =
             Array2::<i64>::from_elem(Ix2(speech_tokens.shape()[0], 3), SILENCE_TOKEN).into_dyn();
@@ -80,7 +80,7 @@ impl<F: Float + 'static> Model<F> {
             "speaker_features" => Tensor::from_array(speaker_features)?
         ])?;
         // TODO: they have it as squeeze(axis=0)
-        let wav = outputs[0].try_extract_array::<f32>()?.squeeze();
+        let wav = outputs[0].try_extract_array::<P>()?.squeeze();
         Ok(wav.to_owned())
     }
 }

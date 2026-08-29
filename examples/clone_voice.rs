@@ -2,11 +2,10 @@ use chatterbox_rs::{ChatterboxTurbo, GenerateOptions, LoadOptions, conditional_d
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use half::f16;
-use num_traits::Float;
 #[cfg(feature = "cuda")]
 use ort::session::Session;
-use ort::{session::builder::SessionBuilder, value::PrimitiveTensorElementType};
-use std::{fmt::Debug, path::PathBuf};
+use ort::session::builder::SessionBuilder;
+use std::path::PathBuf;
 
 /// Clone a voice from a reference clip and synthesize new speech from text.
 #[derive(Parser)]
@@ -73,12 +72,14 @@ fn maybe_cuda_builder(cuda: bool) -> Result<Option<SessionBuilder>> {
     }
 }
 
-async fn run<F: Float + PrimitiveTensorElementType + Debug + 'static>(
-    variant: model::Variant<F>,
-    args: Args,
-) -> Result<()> {
+/// `variant` only ever applies to `language_model`. `speech_encoder`/`token_embedder`/
+/// `conditional_decoder` are always `f32` here — their official exported graphs never benefit
+/// from anything else, and without the `custom-variants` feature they're not even constructible
+/// with any other precision (see [`model::RestrictedPrecision`]).
+async fn run<L: model::Precision>(variant: model::Variant<L>, args: Args) -> Result<()> {
     #[cfg(feature = "download")]
-    chatterbox_rs::downloader::download_missing(variant, false).await?;
+    chatterbox_rs::downloader::download_missing_split(model::Variant::<f32>::FP32, variant, false)
+        .await?;
 
     let options = GenerateOptions {
         max_new_tokens: args.max_new_tokens.try_into()?,
@@ -86,13 +87,19 @@ async fn run<F: Float + PrimitiveTensorElementType + Debug + 'static>(
     };
 
     let mut chatterbox = ChatterboxTurbo::load_with_options(LoadOptions {
-        speech_encoder: speech_encoder::Metadata { variant },
+        speech_encoder: speech_encoder::Metadata {
+            variant: model::Variant::<f32>::FP32,
+        },
         speech_encoder_session_builder: maybe_cuda_builder(args.cuda)?,
-        token_embedder: token_embedder::Metadata { variant },
+        token_embedder: token_embedder::Metadata {
+            variant: model::Variant::<f32>::FP32,
+        },
         token_embedder_session_builder: None,
         language_model: language_model::Metadata { variant },
         language_model_session_builder: maybe_cuda_builder(args.cuda)?,
-        conditional_decoder: conditional_decoder::Metadata { variant },
+        conditional_decoder: conditional_decoder::Metadata {
+            variant: model::Variant::<f32>::FP32,
+        },
         conditional_decoder_session_builder: maybe_cuda_builder(args.cuda)?,
         sample_rate: 24000,
         num_kv_heads: 16,

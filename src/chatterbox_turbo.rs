@@ -1,11 +1,12 @@
 use crate::{
     config, model,
+    model::{Precision, RestrictedPrecision},
     models::{conditional_decoder, language_model, speech_encoder, token_embedder},
 };
 use ndarray::{concatenate, prelude::*};
 use num_traits::Float;
-use ort::{session::builder::SessionBuilder, value::PrimitiveTensorElementType};
-use std::{fmt::Debug, fmt::Display, fs, num::NonZero, path::Path};
+use ort::session::builder::SessionBuilder;
+use std::{fmt::Display, fs, num::NonZero, path::Path};
 use thiserror::Error;
 use tokenizers::Tokenizer;
 use typed_floats::tf32;
@@ -73,10 +74,10 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
 #[derive(Debug)]
 pub struct ChatterboxTurbo<S, T, L, C>
 where
-    S: Float,
-    T: Float,
-    L: Float,
-    C: Float,
+    S: RestrictedPrecision,
+    T: RestrictedPrecision,
+    L: Precision,
+    C: RestrictedPrecision,
 {
     tokenizer: Tokenizer,
     pub speech_encoder: speech_encoder::Model<S>,
@@ -96,10 +97,10 @@ impl ChatterboxTurbo<f32, f32, f32, f32> {
 
 impl<S, T, L, C> ChatterboxTurbo<S, T, L, C>
 where
-    S: Float + 'static,
-    T: Float + 'static,
-    L: Float + PrimitiveTensorElementType + Debug + 'static,
-    C: Float + 'static,
+    S: RestrictedPrecision,
+    T: RestrictedPrecision,
+    L: Precision,
+    C: RestrictedPrecision,
 {
     const START_SPEECH_TOKEN: i64 = 6561;
     const STOP_SPEECH_TOKEN: i64 = 6562;
@@ -205,16 +206,24 @@ where
         let mut prompt_token: Option<ArrayD<i64>> = None;
 
         for tokens_generated in 0..options.max_new_tokens.get() {
-            let mut input_embeds = self.token_embedder.embed_tokens(input_ids.clone())?;
+            // token_embedder's output is typed `T`; normalized to `f32` immediately since that's
+            // what `language_model`'s `inputs_embeds` always needs (proven empirically — that
+            // input stays `f32` regardless of variant, independent of whatever `T`/`S` are).
+            let mut input_embeds =
+                model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?);
 
             if tokens_generated == 0 {
                 let encoding = self
                     .speech_encoder
-                    .encode_reference_audio(audio_values.clone())?;
+                    .encode_reference_audio(model::from_f32(audio_values.clone()))?;
                 prompt_token = Some(encoding.prompt_token);
-                speaker_embeddings = Some(encoding.speaker_embeddings);
-                speaker_features = Some(encoding.speaker_features);
-                input_embeds = concatenate![Axis(1), encoding.condition_embeddings, input_embeds];
+                speaker_embeddings = Some(model::to_f32(encoding.speaker_embeddings));
+                speaker_features = Some(model::to_f32(encoding.speaker_features));
+                input_embeds = concatenate![
+                    Axis(1),
+                    model::to_f32(encoding.condition_embeddings),
+                    input_embeds
+                ];
 
                 // Initialize cache and LLM inputs
                 let &[b, seq_len, ..] = input_embeds.shape() else {
@@ -262,10 +271,10 @@ where
         let wav = self.conditional_decoder.decode_audio(
             prompt_token.expect("prompt token to be cached"),
             &generate_tokens,
-            speaker_embeddings.expect("embeddings to be cached"),
-            speaker_features.expect("features to be cached"),
+            model::from_f32(speaker_embeddings.expect("embeddings to be cached")),
+            model::from_f32(speaker_features.expect("features to be cached")),
         )?;
-        Ok(wav.into_iter().collect())
+        Ok(model::to_f32(wav).into_iter().collect())
     }
 
     pub fn generate_with_ref_file(

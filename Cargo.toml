@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 directories = "6"
 futures = { version = "0.3", optional = true }
-half = { version = "2.1", features = ["num-traits"] }
+half = { version = "2", features = ["num-traits"] }
 hound = "3"
 indicatif = "0.18"
 ndarray = "0.17"
@@ -23,6 +23,7 @@ tokenizers = { version = "0.23", default-features = false, features = [
     "onig",
 ] }
 tokio = { version = "1", features = ["fs", "io-util"], optional = true }
+trait-set = "0.3"
 typed_floats = "1"
 url = { version = "2", optional = true }
 

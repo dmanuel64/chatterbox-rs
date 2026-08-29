@@ -5,19 +5,19 @@ use ort::{
     value::Tensor,
 };
 
-use crate::models::model::{self, Metadata as BaseMetadata};
+use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 
 /// The four outputs of `speech_encoder.onnx`, read positionally — the exported graph doesn't have
-/// stable output names. All four are `float32` regardless of variant (confirmed empirically: even
-/// the `_fp16`/`_q4f16` files keep this graph's boundary entirely `float32`), so this struct is not
-/// generic over `F` — `F` only selects which file gets loaded.
-pub(crate) struct ReferenceAudioEncoding {
+/// stable output names. The three floating-point outputs are typed `P`, matching whatever
+/// [`RestrictedPrecision`] this model was loaded with (always `f32` for the official graphs, since
+/// only `f32` implements [`RestrictedPrecision`] without the `custom-variants` feature).
+pub(crate) struct ReferenceAudioEncoding<P> {
     /// T3 conditioning embedding, prepended to the text embedding stream.
-    pub condition_embeddings: ArrayD<f32>,
+    pub condition_embeddings: ArrayD<P>,
     /// The reference clip's own speech tokens, prepended to the generated ones in `decode_audio`.
     pub prompt_token: ArrayD<i64>,
-    pub speaker_embeddings: ArrayD<f32>,
-    pub speaker_features: ArrayD<f32>,
+    pub speaker_embeddings: ArrayD<P>,
+    pub speaker_features: ArrayD<P>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,28 +37,28 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 }
 
 #[derive(Debug)]
-pub struct Model<F: Float> {
-    metadata: Metadata<F>,
+pub struct Model<P: RestrictedPrecision> {
+    metadata: Metadata<P>,
     session: Session,
 }
 
-impl<F: Float + 'static> model::Model<F> for Model<F> {
+impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
     fn session(&self) -> &Session {
         &self.session
     }
 
-    fn metadata(&self) -> Box<dyn model::Metadata<F>> {
+    fn metadata(&self) -> Box<dyn model::Metadata<P>> {
         Box::new(self.metadata)
     }
 }
 
-impl<F: Float + 'static> Model<F> {
-    pub fn load(metadata: Metadata<F>) -> Result<Self, model::Error> {
+impl<P: RestrictedPrecision> Model<P> {
+    pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
     pub fn load_with_builder(
-        metadata: Metadata<F>,
+        metadata: Metadata<P>,
         mut builder: SessionBuilder,
     ) -> Result<Self, model::Error> {
         Ok(Self {
@@ -69,16 +69,16 @@ impl<F: Float + 'static> Model<F> {
 
     pub(crate) fn encode_reference_audio(
         &mut self,
-        audio_values: ArrayD<f32>,
-    ) -> Result<ReferenceAudioEncoding, model::Error> {
+        audio_values: ArrayD<P>,
+    ) -> Result<ReferenceAudioEncoding<P>, model::Error> {
         let outputs = self
             .session
             .run(ort::inputs!["audio_values" => Tensor::from_array(audio_values)?])?;
         Ok(ReferenceAudioEncoding {
-            condition_embeddings: outputs[0].try_extract_array::<f32>()?.into_owned(),
+            condition_embeddings: outputs[0].try_extract_array::<P>()?.into_owned(),
             prompt_token: outputs[1].try_extract_array::<i64>()?.into_owned(),
-            speaker_embeddings: outputs[2].try_extract_array::<f32>()?.into_owned(),
-            speaker_features: outputs[3].try_extract_array::<f32>()?.into_owned(),
+            speaker_embeddings: outputs[2].try_extract_array::<P>()?.into_owned(),
+            speaker_features: outputs[3].try_extract_array::<P>()?.into_owned(),
         })
     }
 }
