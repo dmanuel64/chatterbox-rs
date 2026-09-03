@@ -1,4 +1,4 @@
-//! `language_model.onnx`: text embeddings + conditioning → speech tokens, generated
+//! `language_model.onnx`: text embeddings + conditioning to speech tokens, generated
 //! autoregressively via a KV cache.
 
 use crate::models::model::{self, Metadata as BaseMetadata, Precision};
@@ -33,9 +33,9 @@ pub struct Model<F: Float> {
     session: Session,
     num_kv_heads: usize,
     head_dim: usize,
-    // Native `F` — the KV cache is the only part of this graph confirmed to ever vary from
+    // Native `F`: the KV cache is the only part of this graph confirmed to ever vary from
     // `float32` (depending on variant), so this is the one tensor pair actually worth being
-    // generic over; everything else (`inputs_embeds`/`logits`) is hardcoded `f32` below.
+    // generic over; everything else (`inputs_embeds`/`logits`) is hardcoded [`f32`] below.
     past_key_values: Vec<(String, Array4<F>)>,
 }
 
@@ -50,7 +50,7 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
 }
 
 impl<P: Precision> Model<P> {
-    /// Loads the model with a default `ort` session builder. `num_kv_heads`/`head_dim` describe
+    /// Loads the model with a default `ort` [`SessionBuilder`]. `num_kv_heads`/`head_dim` describe
     /// the shape of this graph's KV cache tensors.
     pub fn load(
         metadata: Metadata<P>,
@@ -60,7 +60,7 @@ impl<P: Precision> Model<P> {
         Self::load_with_builder(metadata, Session::builder()?, num_kv_heads, head_dim)
     }
 
-    /// Loads the model with a caller-supplied session builder (e.g. to configure an execution
+    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to configure an execution
     /// provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,
@@ -95,9 +95,6 @@ impl<P: Precision> Model<P> {
         }
     }
 
-    /// Initializes `attention_mask` (all ones — nothing is padded/masked at the start of
-    /// generation) and `position_ids` (`0..seq_len` broadcast across the batch) for the very first
-    /// autoregressive step.
     pub(crate) fn init_mask(batch_size: usize, seq_len: usize) -> (Array2<i64>, Array2<i64>) {
         let attention_mask = Array2::ones((batch_size, seq_len));
         let position_ids = Array::from_iter(0..seq_len as i64)
@@ -107,10 +104,6 @@ impl<P: Precision> Model<P> {
         (attention_mask, position_ids)
     }
 
-    /// Runs one autoregressive step. `inputs_embeds`/`logits` are hardcoded `f32` regardless of
-    /// `P` — confirmed empirically that this graph's KV cache is the only part of `language_model`
-    /// that ever varies from `float32`, for every variant checked. The KV cache itself is updated
-    /// in place from this step's `present_key_values` output, so callers don't need to manage it.
     pub(crate) fn step_language_model(
         &mut self,
         inputs_embeds: ArrayD<f32>,
@@ -128,7 +121,11 @@ impl<P: Precision> Model<P> {
 
         let outputs = self.session.run(inputs)?;
         let logits = outputs[0].try_extract_array::<f32>()?.into_owned();
-        for ((_, kv), present) in self.past_key_values.iter_mut().zip(outputs.values().skip(1)) {
+        for ((_, kv), present) in self
+            .past_key_values
+            .iter_mut()
+            .zip(outputs.values().skip(1))
+        {
             *kv = present
                 .try_extract_array::<P>()?
                 .into_owned()

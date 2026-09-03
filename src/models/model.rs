@@ -73,13 +73,13 @@ pub struct Variant<F: Float> {
 }
 
 impl Variant<f32> {
-    /// Unquantized, `f32` weights.
+    /// Unquantized, [`f32`] weights.
     pub const FP32: Self = Self::new_inner(Kind::Baseline);
-    /// 8-bit-quantized weights, `f32` activations.
+    /// 8-bit-quantized weights, [`f32`] activations.
     pub const INT8: Self = Self::new_inner(Kind::Quantized {
         weight_packing: WeightPacking::Bit8,
     });
-    /// 4-bit-quantized weights, `f32` activations.
+    /// 4-bit-quantized weights, [`f32`] activations.
     pub const Q4: Self = Self::new_inner(Kind::Quantized {
         weight_packing: WeightPacking::Bit4,
     });
@@ -96,7 +96,7 @@ impl Variant<f16> {
 
 impl<F: Float + 'static> Variant<F> {
     /// Builds a variant for any [`Precision`] `F`. Only available with the `custom-variants`
-    /// feature, since the official graphs are only ever proven to exist as `f32` or `f16` — use
+    /// feature, since the official graphs are only ever proven to exist as [`f32`] or [`f16`]. Use
     /// the associated constants (e.g. [`Variant::<f32>::FP32`]) for those.
     #[cfg(feature = "custom-variants")]
     pub const fn new(kind: Kind) -> Self {
@@ -210,25 +210,12 @@ impl<F: Float + 'static> Display for dyn Model<F> {
     }
 }
 
-// The float types ONNX Runtime can actually build a tensor from — every real model's generic
-// bound needs at least this much, so it's pulled out once rather than spelled out at every site.
 trait_set::trait_set! {
     /// Floating-point types `ort` can build a tensor from. The baseline bound for every model;
-    /// [`RestrictedPrecision`] narrows this further for components proven to always be `f32`.
+    /// [`RestrictedPrecision`] narrows this further for components proven to always be [`f32`].
     pub trait Precision = Float + PrimitiveTensorElementType + Debug + 'static;
 }
 
-// A precision a model's own activation tensors (as opposed to its internally-quantized weights)
-// can actually be constructed as. Applies to models that would otherwise have `f32` hardcoded —
-// `speech_encoder`, `token_embedder`, `conditional_decoder` — since their official exported
-// graphs only ever have `float32` tensors at the boundary; `language_model` isn't restricted by
-// this (it's bounded by [`Precision`] directly), since its KV cache already needs real `float16`
-// support unconditionally.
-//
-// Without `custom-variants`, only `f32` implements this — matching what the official graphs
-// actually are. With `custom-variants`, this widens to any [`Precision`], same as `Variant::new`
-// widens to accept any such type — so a hand-exported custom graph with activations in `f16`,
-// `f64`, or any other supported width can be used directly.
 #[cfg(feature = "custom-variants")]
 trait_set::trait_set! {
     /// A precision a model's own activation tensors can actually be constructed as. See the
@@ -243,17 +230,17 @@ pub trait RestrictedPrecision: Precision + FromPrimitive {}
 #[cfg(not(feature = "custom-variants"))]
 impl RestrictedPrecision for f32 {}
 
-/// Converts an array of any [`RestrictedPrecision`] to `f32`, for combining tensors from two
+/// Converts an array of any [`RestrictedPrecision`] to [`f32`], for combining tensors from two
 /// components whose own activation types may differ (e.g. `speech_encoder`'s `S` and
 /// `token_embedder`'s `T`) before handing them to a component with a fixed, proven dtype
-/// requirement of its own (`language_model`'s `inputs_embeds`, always `f32` regardless of variant).
+/// requirement of its own (`language_model`'s `inputs_embeds`, always [`f32`] regardless of variant).
 pub fn to_f32<F: num_traits::ToPrimitive + Clone, D: ndarray::Dimension>(
     array: ndarray::Array<F, D>,
 ) -> ndarray::Array<f32, D> {
     array.mapv(|x| x.to_f32().expect("value should be representable as f32"))
 }
 
-/// The inverse of [`to_f32`] — converts `f32` back into whatever [`RestrictedPrecision`] a
+/// The inverse of [`to_f32`]: converts [`f32`] back into whatever [`RestrictedPrecision`] a
 /// downstream component's own tensors actually need.
 pub fn from_f32<F: num_traits::FromPrimitive, D: ndarray::Dimension>(
     array: ndarray::Array<f32, D>,

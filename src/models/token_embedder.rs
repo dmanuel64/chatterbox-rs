@@ -1,4 +1,4 @@
-//! `embed_tokens.onnx`: token ids → embeddings, fed into `language_model` as `inputs_embeds`.
+//! `embed_tokens.onnx`: token ids to embeddings, fed into `language_model` as `inputs_embeds`.
 
 use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 use ndarray::ArrayD;
@@ -43,12 +43,12 @@ impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
 }
 
 impl<P: RestrictedPrecision> Model<P> {
-    /// Loads the model with a default `ort` session builder.
+    /// Loads the model with a default `ort` [`SessionBuilder`].
     pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
-    /// Loads the model with a caller-supplied session builder (e.g. to configure an execution
+    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to configure an execution
     /// provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,

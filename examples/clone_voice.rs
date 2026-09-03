@@ -1,4 +1,7 @@
-use chatterbox_rs::{ChatterboxTurbo, GenerateOptions, LoadOptions, conditional_decoder, language_model, model, speech_encoder, token_embedder};
+use chatterbox_rs::{
+    ChatterboxTurbo, GenerateOptions, LoadOptions, conditional_decoder, language_model, model,
+    speech_encoder, token_embedder,
+};
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use half::f16;
@@ -72,10 +75,6 @@ fn maybe_cuda_builder(cuda: bool) -> Result<Option<SessionBuilder>> {
     }
 }
 
-/// `variant` only ever applies to `language_model`. `speech_encoder`/`token_embedder`/
-/// `conditional_decoder` are always `f32` here — their official exported graphs never benefit
-/// from anything else, and without the `custom-variants` feature they're not even constructible
-/// with any other precision (see [`model::RestrictedPrecision`]).
 async fn run<L: model::Precision>(variant: model::Variant<L>, args: Args) -> Result<()> {
     #[cfg(feature = "download")]
     chatterbox_rs::downloader::download_missing_split(model::Variant::<f32>::FP32, variant, false)

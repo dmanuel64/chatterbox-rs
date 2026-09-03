@@ -1,4 +1,4 @@
-//! [`ChatterboxTurbo`], the top-level TTS pipeline tying the four ONNX models together.
+//! [`ChatterboxTurbo`], the top-level TTS pipeline for Chatterbox-Turbo.
 
 use crate::{
     config, model,
@@ -18,14 +18,14 @@ use typed_floats::tf32;
 pub enum Error {
     /// An `ort` error not already covered by [`Error::Model`].
     #[error("An ONNX runtime error occurred: {0}")]
-    OnnxGeneric(#[from] ort::Error),
+    Onnx(#[from] ort::Error),
     /// Text tokenization failed.
     #[error("A tokenizer error occurred: {0}")]
     Tokenizer(#[from] tokenizers::Error),
     /// Loading or writing audio failed.
     #[error("An audio error occurred: {0}")]
     Audio(#[from] crate::audio::Error),
-    /// A filesystem operation failed (e.g. reading a reference clip or writing the output file).
+    /// A filesystem operation failed.
     #[error("An I/O error occurred: {0}")]
     Io(#[from] std::io::Error),
     /// One of the four ONNX components failed to load or run.
@@ -34,9 +34,9 @@ pub enum Error {
 }
 
 /// Configures [`ChatterboxTurbo::load_with_options`]: which [`model::Variant`] each of the four
-/// components loads, and an optional `ort` session builder per component (e.g. to select an
+/// components loads, and an optional `ort` [`SessionBuilder`] per component (e.g. to select an
 /// execution provider). `S`/`T`/`L`/`C` are the precisions of the speech encoder, token embedder,
-/// language model, and conditional decoder respectively — they can differ independently.
+/// language model, and conditional decoder respectively.
 pub struct LoadOptions<S, T, L, C>
 where
     S: Float,
@@ -86,9 +86,8 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
     }
 }
 
-/// The full TTS pipeline: text + a reference voice clip → generated speech. Owns one loaded
-/// instance of each of the four ONNX components, generic over each one's own precision
-/// (`S`/`T`/`L`/`C`, matching [`LoadOptions`]).
+/// The full TTS pipeline: text + a reference voice clip to generated speech. Owns one loaded
+/// instance of each of the four ONNX components.
 #[derive(Debug)]
 pub struct ChatterboxTurbo<S, T, L, C>
 where
@@ -108,7 +107,7 @@ where
 }
 
 impl ChatterboxTurbo<f32, f32, f32, f32> {
-    /// Loads all four components at `f32`/`int8` defaults (see [`LoadOptions::default`]).
+    /// Loads all four components at [`f32`]/`int8` defaults (see [`LoadOptions::default`]).
     pub fn load() -> Result<Self, Error> {
         Self::load_with_options(LoadOptions::default())
     }
@@ -124,7 +123,7 @@ where
     const START_SPEECH_TOKEN: i64 = 6561;
     const STOP_SPEECH_TOKEN: i64 = 6562;
 
-    /// Loads all four components per `options`, using each component's own session builder when
+    /// Loads all four components per `options`, using each component's own [`SessionBuilder`] when
     /// provided, or an `ort` default otherwise.
     pub fn load_with_options(options: LoadOptions<S, T, L, C>) -> Result<Self, Error> {
         let tokenizer = Tokenizer::from_file(
@@ -209,8 +208,8 @@ where
             .insert_axis(last_axis)
     }
 
-    /// Generates speech for `text`, cloning the voice from `reference_audio_bytes` (any format
-    /// supported by the `audio` module). Returns mono `f32` samples at `self.sample_rate`.
+    /// Generates speech for `text`, using the voice from `reference_audio_bytes` (any format
+    /// supported by the `audio` module). Returns mono [[`f32`]] samples at `self.sample_rate`.
     pub fn generate(
         &mut self,
         text: &str,
@@ -229,9 +228,8 @@ where
         let mut prompt_token: Option<ArrayD<i64>> = None;
 
         for tokens_generated in 0..options.max_new_tokens.get() {
-            // token_embedder's output is typed `T`; normalized to `f32` immediately since that's
-            // what `language_model`'s `inputs_embeds` always needs (proven empirically — that
-            // input stays `f32` regardless of variant, independent of whatever `T`/`S` are).
+            // token_embedder's output is typed T; normalized to f32 immediately since that's
+            // what language_model's inputs_embeds always needs
             let mut input_embeds =
                 model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?);
 
@@ -259,9 +257,11 @@ where
                 position_ids = ids;
             }
 
-            let logits =
-                self.language_model
-                    .step_language_model(input_embeds, &attention_mask, &position_ids)?;
+            let logits = self.language_model.step_language_model(
+                input_embeds,
+                &attention_mask,
+                &position_ids,
+            )?;
             input_ids =
                 Self::sample_next_token(&generate_tokens, logits, options.repetition_penalty);
             generate_tokens = concatenate![Axis(1), generate_tokens, input_ids];
@@ -277,8 +277,8 @@ where
             ];
             position_ids = position_ids.slice(s![.., -1..]).to_owned() + 1;
         }
-        // `decode_audio` unconditionally strips the last token, assuming it's the stop token.
-        // If we hit `max_new_tokens` without ever sampling one, append it so a real generated
+        // decode_audio unconditionally strips the last token, assuming it's the stop token.
+        // If we hit max_new_tokens without ever sampling one, append it so a real generated
         // token doesn't get silently discarded instead.
         if !generate_tokens
             .slice(s![.., -1..])

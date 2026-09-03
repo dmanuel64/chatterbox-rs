@@ -35,11 +35,8 @@ pub enum Error {
     Wav(#[from] hound::Error),
 }
 
-/// Loads an audio file of any supported format into mono `f32` samples at `target_sample_rate`,
+/// Loads an audio file of any supported format into mono [`f32`] samples at `target_sample_rate`,
 /// shaped `(1, num_samples)`.
-///
-/// Equivalent to `librosa.load(path, sr=target_sample_rate)` (mono downmix + resample) followed
-/// by `audio_values[np.newaxis, :]`.
 pub fn load(bytes: Vec<u8>, target_sample_rate: u32) -> Result<ArrayD<f32>, Error> {
     let (samples, sample_rate) = decode_to_mono_f32(bytes)?;
     let samples = if sample_rate == target_sample_rate {
@@ -53,8 +50,12 @@ pub fn load(bytes: Vec<u8>, target_sample_rate: u32) -> Result<ArrayD<f32>, Erro
         .into_dyn())
 }
 
-/// Writes mono `f32` samples to a WAV file at `output_path`, at `sample_rate`.
-pub fn write(samples: &[f32], sample_rate: u32, output_path: impl AsRef<Path>) -> Result<(), Error> {
+/// Writes mono [`f32`] samples to a WAV file at `output_path`, at `sample_rate`.
+pub fn write(
+    samples: &[f32],
+    sample_rate: u32,
+    output_path: impl AsRef<Path>,
+) -> Result<(), Error> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,

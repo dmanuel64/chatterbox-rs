@@ -1,4 +1,4 @@
-//! `conditional_decoder.onnx`: speech tokens + speaker embedding/features → waveform, in one
+//! `conditional_decoder.onnx`: speech tokens + speaker embedding/features to waveform, in one
 //! distilled step (no separate mel/vocoder split is exposed by the exported graph).
 
 use ndarray::{ArrayD, ArrayRefD, Axis, Ix2, concatenate, prelude::*};
@@ -49,12 +49,12 @@ impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
 }
 
 impl<P: RestrictedPrecision> Model<P> {
-    /// Loads the model with a default `ort` session builder.
+    /// Loads the model with a default `ort` [`SessionBuilder`].
     pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
-    /// Loads the model with a caller-supplied session builder (e.g. to configure an execution
+    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to configure an execution
     /// provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,
@@ -66,10 +66,6 @@ impl<P: RestrictedPrecision> Model<P> {
         })
     }
 
-    /// `generate_tokens` is the full running sequence including the seed `START_SPEECH_TOKEN` and
-    /// trailing `STOP_SPEECH_TOKEN` — both get sliced off here, leaving only the real generated
-    /// speech tokens, which get prepended with `prompt_token` (the reference clip's own speech
-    /// tokens) and padded with a few trailing silence tokens before decoding.
     pub(crate) fn decode_audio(
         &mut self,
         prompt_token: ArrayD<i64>,
