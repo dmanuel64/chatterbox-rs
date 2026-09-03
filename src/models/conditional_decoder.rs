@@ -1,5 +1,6 @@
-//! `conditional_decoder.onnx`: speech tokens + speaker embedding/features to waveform, in one
-//! distilled step (no separate mel/vocoder split is exposed by the exported graph).
+//! Chatterbox-Turbo's `conditional_decoder.onnx`: speech tokens + speaker embedding/features to
+//! waveform, in one distilled step (no separate mel/vocoder split is exposed by the exported
+//! graph).
 
 use ndarray::{ArrayD, ArrayRefD, Axis, Ix2, concatenate, prelude::*};
 use num_traits::Float;
@@ -11,7 +12,8 @@ use ort::{
 use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 
 /// Speech-token id `conditional_decoder.onnx` expects appended as trailing silence padding after
-/// the real generated speech tokens.
+/// the real generated speech tokens. Specific to Chatterbox-Turbo; other Chatterbox variants may
+/// use a different value or none at all.
 const SILENCE_TOKEN: i64 = 4299;
 
 /// Identifies which `conditional_decoder` ONNX graph to load.

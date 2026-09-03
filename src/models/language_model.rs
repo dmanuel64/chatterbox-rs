@@ -1,5 +1,5 @@
-//! `language_model.onnx`: text embeddings + conditioning to speech tokens, generated
-//! autoregressively via a KV cache.
+//! Chatterbox-Turbo's `language_model.onnx`: text embeddings + conditioning to speech tokens,
+//! generated autoregressively via a KV cache.
 
 use crate::models::model::{self, Metadata as BaseMetadata, Precision};
 use ndarray::{Array, Array2, Array4, ArrayD, Ix4};

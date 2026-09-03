@@ -1,4 +1,5 @@
-//! `embed_tokens.onnx`: token ids to embeddings, fed into `language_model` as `inputs_embeds`.
+//! Chatterbox-Turbo's `embed_tokens.onnx`: token ids to embeddings, fed into `language_model` as
+//! `inputs_embeds`.
 
 use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 use ndarray::ArrayD;

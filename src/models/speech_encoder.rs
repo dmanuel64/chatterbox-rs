@@ -1,5 +1,5 @@
-//! `speech_encoder.onnx`: reference audio to conditioning embedding, prompt tokens, and speaker
-//! embedding/features.
+//! Chatterbox-Turbo's `speech_encoder.onnx`: reference audio to conditioning embedding, prompt
+//! tokens, and speaker embedding/features.
 
 use ndarray::ArrayD;
 use num_traits::Float;
