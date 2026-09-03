@@ -86,9 +86,9 @@ impl Variant<f32> {
 }
 
 impl Variant<f16> {
-    /// Unquantized weights, `f16` activations.
+    /// Unquantized weights, [`f16`] activations.
     pub const FP16: Variant<f16> = Variant::new_inner(Kind::Baseline);
-    /// 4-bit-quantized weights, `f16` activations.
+    /// 4-bit-quantized weights, [`f16`] activations.
     pub const Q4_FP16: Variant<f16> = Variant::new_inner(Kind::Quantized {
         weight_packing: WeightPacking::Bit4,
     });
@@ -96,7 +96,7 @@ impl Variant<f16> {
 
 impl<F: Float + 'static> Variant<F> {
     /// Builds a variant for any [`Precision`] `F`. Only available with the `custom-variants`
-    /// feature, since the official graphs are only ever proven to exist as [`f32`] or [`f16`]. Use
+    /// feature, since the official graphs are only ever proven to exist as [`f32`] or [[`f16`]]. Use
     /// the associated constants (e.g. [`Variant::<f32>::FP32`]) for those.
     #[cfg(feature = "custom-variants")]
     pub const fn new(kind: Kind) -> Self {

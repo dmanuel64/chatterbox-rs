@@ -33,9 +33,6 @@ pub struct Model<F: Float> {
     session: Session,
     num_kv_heads: usize,
     head_dim: usize,
-    // Native `F`: the KV cache is the only part of this graph confirmed to ever vary from
-    // `float32` (depending on variant), so this is the one tensor pair actually worth being
-    // generic over; everything else (`inputs_embeds`/`logits`) is hardcoded [`f32`] below.
     past_key_values: Vec<(String, Array4<F>)>,
 }
 
