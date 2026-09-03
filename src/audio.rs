@@ -12,18 +12,25 @@ use symphonia::core::{
 };
 use thiserror::Error;
 
+/// Errors that can occur while loading or writing audio.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Decoding the input format (probing, demuxing, or the codec itself) failed.
     #[error("failed to decode reference audio: {0}")]
     Symphonia(#[from] symphonia::core::errors::Error),
+    /// The input file has no audio track to decode.
     #[error("reference audio has no audio track")]
     NoAudioTrack,
+    /// The audio track's codec parameters didn't report a sample rate.
     #[error("reference audio's codec did not report a sample rate")]
     UnknownSampleRate,
+    /// The resampler couldn't be built for the requested rate conversion.
     #[error("failed to resample reference audio: {0}")]
     ResamplerConstruction(#[from] rubato::ResamplerConstructionError),
+    /// Resampling failed while processing audio.
     #[error("failed to resample reference audio: {0}")]
     Resample(#[from] rubato::ResampleError),
+    /// Writing the output WAV file failed.
     #[error("failed to write WAV file: {0}")]
     Wav(#[from] hound::Error),
 }

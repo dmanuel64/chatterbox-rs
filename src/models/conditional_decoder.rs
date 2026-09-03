@@ -1,3 +1,6 @@
+//! `conditional_decoder.onnx`: speech tokens + speaker embedding/features → waveform, in one
+//! distilled step (no separate mel/vocoder split is exposed by the exported graph).
+
 use ndarray::{ArrayD, ArrayRefD, Axis, Ix2, concatenate, prelude::*};
 use num_traits::Float;
 use ort::{
@@ -11,6 +14,7 @@ use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 /// the real generated speech tokens.
 const SILENCE_TOKEN: i64 = 4299;
 
+/// Identifies which `conditional_decoder` ONNX graph to load.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Metadata<F: Float> {
@@ -27,6 +31,7 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
     }
 }
 
+/// A loaded `conditional_decoder.onnx` session.
 #[derive(Debug)]
 pub struct Model<P: RestrictedPrecision> {
     metadata: Metadata<P>,
@@ -44,10 +49,13 @@ impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
 }
 
 impl<P: RestrictedPrecision> Model<P> {
+    /// Loads the model with a default `ort` session builder.
     pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
         Self::load_with_builder(metadata, Session::builder()?)
     }
 
+    /// Loads the model with a caller-supplied session builder (e.g. to configure an execution
+    /// provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,
         mut builder: SessionBuilder,

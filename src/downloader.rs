@@ -1,3 +1,6 @@
+//! Fetches ONNX graphs, weights, and the tokenizer from Hugging Face into [`config::ONNX_DIR`] /
+//! [`config::TOKENIZER_PATH`]. Requires the `download` feature.
+
 use futures::{StreamExt, TryStreamExt, stream};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::Url;
@@ -16,18 +19,23 @@ use crate::{
 };
 use num_traits::Float;
 
+/// Errors that can occur while downloading model files.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// The HTTP request itself failed.
     #[error("failed to get remote file: {0}")]
     Reqwest(#[from] reqwest::Error),
+    /// Writing the downloaded bytes to disk failed.
     #[error("failed to stream file: {source}")]
     Streaming { url: Url, source: io::Error },
+    /// A repo owner, name, branch, or file path couldn't be turned into a valid URL segment.
     #[error("invalid {kind} name: '{name}'")]
     InvalidName {
         name: String,
         kind: &'static str,
         source: url::ParseError,
     },
+    /// The download stopped short of the server-reported content length.
     #[error("incomplete download of {url}: expected {expected} bytes, got {actual}")]
     Incomplete {
         url: Url,
@@ -201,6 +209,8 @@ async fn download_chatterbot_file(
     .await
 }
 
+/// A single file to fetch: a source path relative to the Hugging Face repo, a local destination,
+/// and whether to re-download it even if it already exists.
 pub struct SourceDest {
     source: String,
     dest: PathBuf,
@@ -273,6 +283,8 @@ async fn download_onnx_files<F: Float + 'static>(
     download_chatterbot_files(&targets, use_patched_models).await
 }
 
+/// Downloads all four ONNX graphs (and their weights) for `variant`, overwriting any files
+/// already present when `force` is `true`.
 pub async fn download_model<F: Float + 'static>(
     variant: model::Variant<F>,
     force: bool,
@@ -307,11 +319,14 @@ fn tokenizer_target(force: bool) -> SourceDest {
     }
 }
 
+/// Downloads the tokenizer, overwriting it if it's already present and `force` is `true`.
 pub async fn download_tokenizer(force: bool, use_patched_models: bool) -> Result<(), Error> {
     let targets = [tokenizer_target(force)];
     download_chatterbot_files(&targets, use_patched_models).await
 }
 
+/// Downloads `variant`'s ONNX graphs, weights, and the tokenizer, skipping any files that
+/// already exist on disk.
 pub async fn download_missing<F: Float + 'static>(
     variant: model::Variant<F>,
     use_patched_models: bool,

@@ -1,3 +1,6 @@
+//! `language_model.onnx`: text embeddings + conditioning → speech tokens, generated
+//! autoregressively via a KV cache.
+
 use crate::models::model::{self, Metadata as BaseMetadata, Precision};
 use ndarray::{Array, Array2, Array4, ArrayD, Ix4};
 use num_traits::Float;
@@ -6,6 +9,7 @@ use ort::{
     value::Tensor,
 };
 
+/// Identifies which `language_model` ONNX graph to load.
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Metadata<F: Float> {
@@ -22,6 +26,7 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
     }
 }
 
+/// A loaded `language_model.onnx` session, holding its own KV cache between autoregressive steps.
 #[derive(Debug)]
 pub struct Model<F: Float> {
     metadata: Metadata<F>,
@@ -45,6 +50,8 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
 }
 
 impl<P: Precision> Model<P> {
+    /// Loads the model with a default `ort` session builder. `num_kv_heads`/`head_dim` describe
+    /// the shape of this graph's KV cache tensors.
     pub fn load(
         metadata: Metadata<P>,
         num_kv_heads: usize,
@@ -53,6 +60,8 @@ impl<P: Precision> Model<P> {
         Self::load_with_builder(metadata, Session::builder()?, num_kv_heads, head_dim)
     }
 
+    /// Loads the model with a caller-supplied session builder (e.g. to configure an execution
+    /// provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,
         mut builder: SessionBuilder,

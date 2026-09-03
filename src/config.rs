@@ -1,3 +1,7 @@
+//! Runtime configuration: where model files live on disk, and (with the `download` feature)
+//! how downloads behave. All settings are `RwLock`-guarded statics, so they can be overridden
+//! at runtime before models are loaded.
+
 use directories::ProjectDirs;
 #[cfg(feature = "download")]
 use std::env;

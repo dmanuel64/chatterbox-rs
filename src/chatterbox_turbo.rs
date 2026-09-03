@@ -1,3 +1,5 @@
+//! [`ChatterboxTurbo`], the top-level TTS pipeline tying the four ONNX models together.
+
 use crate::{
     config, model,
     model::{Precision, RestrictedPrecision},
@@ -11,20 +13,30 @@ use thiserror::Error;
 use tokenizers::Tokenizer;
 use typed_floats::tf32;
 
+/// Errors that can occur while loading or running [`ChatterboxTurbo`].
 #[derive(Debug, Error)]
 pub enum Error {
+    /// An `ort` error not already covered by [`Error::Model`].
     #[error("An ONNX runtime error occurred: {0}")]
     OnnxGeneric(#[from] ort::Error),
+    /// Text tokenization failed.
     #[error("A tokenizer error occurred: {0}")]
     Tokenizer(#[from] tokenizers::Error),
+    /// Loading or writing audio failed.
     #[error("An audio error occurred: {0}")]
     Audio(#[from] crate::audio::Error),
+    /// A filesystem operation failed (e.g. reading a reference clip or writing the output file).
     #[error("An I/O error occurred: {0}")]
     Io(#[from] std::io::Error),
+    /// One of the four ONNX components failed to load or run.
     #[error("A model error occurred: {0}")]
     Model(#[from] crate::models::model::Error),
 }
 
+/// Configures [`ChatterboxTurbo::load_with_options`]: which [`model::Variant`] each of the four
+/// components loads, and an optional `ort` session builder per component (e.g. to select an
+/// execution provider). `S`/`T`/`L`/`C` are the precisions of the speech encoder, token embedder,
+/// language model, and conditional decoder respectively — they can differ independently.
 pub struct LoadOptions<S, T, L, C>
 where
     S: Float,
@@ -40,8 +52,11 @@ where
     pub language_model_session_builder: Option<SessionBuilder>,
     pub conditional_decoder: conditional_decoder::Metadata<C>,
     pub conditional_decoder_session_builder: Option<SessionBuilder>,
+    /// Sample rate (Hz) of the generated waveform.
     pub sample_rate: u32,
+    /// Number of KV heads in the language model's attention, for sizing its KV cache.
     pub num_kv_heads: usize,
+    /// Per-head dimension in the language model's attention, for sizing its KV cache.
     pub head_dim: usize,
 }
 
@@ -71,6 +86,9 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
     }
 }
 
+/// The full TTS pipeline: text + a reference voice clip → generated speech. Owns one loaded
+/// instance of each of the four ONNX components, generic over each one's own precision
+/// (`S`/`T`/`L`/`C`, matching [`LoadOptions`]).
 #[derive(Debug)]
 pub struct ChatterboxTurbo<S, T, L, C>
 where
@@ -90,6 +108,7 @@ where
 }
 
 impl ChatterboxTurbo<f32, f32, f32, f32> {
+    /// Loads all four components at `f32`/`int8` defaults (see [`LoadOptions::default`]).
     pub fn load() -> Result<Self, Error> {
         Self::load_with_options(LoadOptions::default())
     }
@@ -105,6 +124,8 @@ where
     const START_SPEECH_TOKEN: i64 = 6561;
     const STOP_SPEECH_TOKEN: i64 = 6562;
 
+    /// Loads all four components per `options`, using each component's own session builder when
+    /// provided, or an `ort` default otherwise.
     pub fn load_with_options(options: LoadOptions<S, T, L, C>) -> Result<Self, Error> {
         let tokenizer = Tokenizer::from_file(
             config::TOKENIZER_PATH
@@ -188,6 +209,8 @@ where
             .insert_axis(last_axis)
     }
 
+    /// Generates speech for `text`, cloning the voice from `reference_audio_bytes` (any format
+    /// supported by the `audio` module). Returns mono `f32` samples at `self.sample_rate`.
     pub fn generate(
         &mut self,
         text: &str,
@@ -277,6 +300,7 @@ where
         Ok(model::to_f32(wav).into_iter().collect())
     }
 
+    /// Like [`Self::generate`], but reads the reference audio from a file path.
     pub fn generate_with_ref_file(
         &mut self,
         text: &str,
@@ -287,6 +311,7 @@ where
         self.generate(text, target_audio_bytes, options)
     }
 
+    /// Like [`Self::generate`], but writes the result to a WAV file instead of returning samples.
     pub fn generate_with_output(
         &mut self,
         text: &str,
@@ -302,6 +327,8 @@ where
         )?)
     }
 
+    /// Combines [`Self::generate_with_ref_file`] and [`Self::generate_with_output`]: reads the
+    /// reference audio from a path and writes the result to a WAV file.
     pub fn generate_with_files(
         &mut self,
         text: &str,
@@ -314,10 +341,13 @@ where
     }
 }
 
+/// Generation parameters for [`ChatterboxTurbo::generate`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenerateOptions {
+    /// Upper bound on generated speech tokens, before decoding stops even without a stop token.
     pub max_new_tokens: NonZero<u32>,
+    /// Penalty applied to logits of tokens already generated, discouraging repetition.
     pub repetition_penalty: tf32::StrictlyPositiveFinite,
 }
 
@@ -358,30 +388,52 @@ impl RepetitionPenaltyLogitsProcessor {
     }
 }
 
+/// A bracketed tag (e.g. `[angry]`) Chatterbox recognizes when prepended to input text,
+/// conditioning generation on that emotion or delivery style. See [`ParalinguisticStrExt`].
 #[derive(Debug, Clone, Copy)]
 pub enum ParalinguisticTag {
+    /// `[angry]`
     Angry,
+    /// `[fear]`
     Fear,
+    /// `[surprised]`
     Surprised,
+    /// `[whispering]`
     Whispering,
+    /// `[advertisement]`
     Advertisement,
+    /// `[dramatic]`
     Dramatic,
+    /// `[narration]`
     Narration,
+    /// `[crying]`
     Crying,
+    /// `[happy]`
     Happy,
+    /// `[sarcastic]`
     Sarcastic,
+    /// `[clear throat]`
     ClearThroat,
+    /// `[sigh]`
     Sigh,
+    /// `[shush]`
     Shush,
+    /// `[cough]`
     Cough,
+    /// `[groan]`
     Groan,
+    /// `[sniff]`
     Sniff,
+    /// `[gasp]`
     Gasp,
+    /// `[chuckle]`
     Chuckle,
+    /// `[laugh]`
     Laugh,
 }
 
 impl ParalinguisticTag {
+    /// The literal bracketed tag text, e.g. `"[angry]"`.
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Angry => "[angry]",
@@ -413,6 +465,8 @@ impl Display for ParalinguisticTag {
     }
 }
 
+/// Extension trait for prepending [`ParalinguisticTag`]s to text before passing it to
+/// [`ChatterboxTurbo::generate`].
 pub trait ParalinguisticStrExt {
     /// Prepends `tag` to the beginning of the text, conditioning the whole utterance on it.
     fn with_tag(&self, tag: ParalinguisticTag) -> String {
