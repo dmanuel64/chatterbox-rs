@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 //! A Rust port of [Resemble AI's Chatterbox](https://github.com/resemble-ai/chatterbox)
 //! text-to-speech / voice-cloning pipeline, running the pipeline's components as exported ONNX
 //! graphs through the `ort` crate.

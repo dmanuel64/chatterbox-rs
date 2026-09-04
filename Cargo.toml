@@ -9,7 +9,6 @@ repository = "https://github.com/dmanuel64/chatterbox-rs"
 authors = ["Dylan Manuel"]
 categories = ["artificial-intelligence", "multimedia::audio"]
 keywords = ["llms", "text-to-speech", "chatterbox"]
-rust-version = "1.96.0"
 
 [package.metadata.docs.rs]
 all-features = true
