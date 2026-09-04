@@ -285,7 +285,6 @@ dependencies = [
  "ndarray",
  "num-traits",
  "ort",
- "rand 0.10.2",
  "reqwest",
  "rubato",
  "serde",

@@ -1,6 +1,6 @@
 # `chatterbox-rs`
 
-A Rust port of [ResembleAI's Chatterbox](https://github.com/resemble-ai/chatterbox) text-to-speech / voice-cloning pipeline, running its components as exported ONNX graphs through the [`ort`](https://ort.pyke.io/) crate.
+A Rust port of [ResembleAI's Chatterbox](https://github.com/resemble-ai/chatterbox) text-to-speech pipeline, running its components as exported ONNX graphs through the [`ort`](https://ort.pyke.io/) crate.
 
 ## Table of Contents
 
