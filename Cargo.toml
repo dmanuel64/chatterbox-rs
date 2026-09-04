@@ -32,7 +32,7 @@ tokenizers = { version = "0.23", default-features = false, features = [
     "onig",
 ] }
 tokio = { version = "1", features = ["fs", "io-util"], optional = true }
-trait-set = "0.3"
+trait-set = "0.5"
 typed_floats = "1"
 url = { version = "2", optional = true }
 
