@@ -12,6 +12,7 @@ words:
   - Embedder
   - endoftext
   - isomp
+  - llms
   - Logits
   - ndarray
   - Onnx
