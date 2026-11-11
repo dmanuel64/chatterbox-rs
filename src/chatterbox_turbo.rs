@@ -261,7 +261,7 @@ where
                     unreachable!("input_embeds should have at least 2 dimensions")
                 };
                 batch_size = b;
-                self.language_model.init_past_key_values(batch_size);
+                self.language_model.init_past_key_values(batch_size)?;
                 let (mask, ids) = language_model::Model::<L>::init_mask(batch_size, seq_len);
                 attention_mask = mask;
                 position_ids = ids;

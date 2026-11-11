@@ -7,7 +7,7 @@ use num_traits::Float;
 use ort::{
     environment::Environment,
     session::{Session, builder::SessionBuilder},
-    value::Tensor,
+    value::{DynValue, Tensor},
 };
 
 /// Identifies which `language_model` ONNX graph to load.
@@ -27,6 +27,13 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
     }
 }
 
+#[derive(Debug)]
+struct KvSlot {
+    input_name: String,
+    output_name: String,
+    value: DynValue,
+}
+
 /// A loaded `language_model.onnx` session, holding its own KV cache between
 /// autoregressive steps.
 #[derive(Debug)]
@@ -35,7 +42,7 @@ pub struct Model<F: Float> {
     session: Session,
     num_kv_heads: usize,
     head_dim: usize,
-    past_key_values: Vec<(String, Array4<F>)>,
+    past_key_values: Vec<KvSlot>,
 }
 
 impl<F: Float + 'static> model::Model<F> for Model<F> {
@@ -87,7 +94,7 @@ impl<P: Precision> Model<P> {
     /// zero-length cache tensor. Done by inspecting `session.inputs()` rather
     /// than hardcoding a layer count, so this stays correct regardless of how
     /// many layers a given variant's graph actually has.
-    pub(crate) fn init_past_key_values(&mut self, batch_size: usize) {
+    pub(crate) fn init_past_key_values(&mut self, batch_size: usize) -> Result<(), model::Error> {
         self.past_key_values.clear();
         for input in self
             .session
@@ -95,11 +102,27 @@ impl<P: Precision> Model<P> {
             .iter()
             .filter(|i| i.name().contains("past_key_values"))
         {
-            self.past_key_values.push((
-                input.name().to_string(),
-                Array4::<P>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim)),
-            ));
+            let input_name = input.name().to_string();
+            let output_name = input_name.replacen("past_key_values", "present", 1);
+            if !self
+                .session
+                .outputs()
+                .iter()
+                .any(|o| o.name() == output_name)
+            {
+                return Err(ort::Error::new(format!(
+                    "no output `{output_name}` matching KV cache input `{input_name}`"
+                ))
+                .into());
+            }
+            let empty = Array4::<P>::zeros(Ix4(batch_size, self.num_kv_heads, 0, self.head_dim));
+            self.past_key_values.push(KvSlot {
+                input_name,
+                output_name,
+                value: Tensor::from_array(empty)?.into_dyn(),
+            });
         }
+        Ok(())
     }
 
     pub(crate) fn init_mask(batch_size: usize, seq_len: usize) -> (Array2<i64>, Array2<i64>) {
@@ -122,22 +145,16 @@ impl<P: Precision> Model<P> {
             "attention_mask" => Tensor::from_array(attention_mask.clone())?,
             "position_ids" => Tensor::from_array(position_ids.clone())?,
         ];
-        for (name, kv) in &self.past_key_values {
-            inputs.push((name.as_str().into(), Tensor::from_array(kv.clone())?.into()));
+        for slot in &self.past_key_values {
+            inputs.push((slot.input_name.as_str().into(), (&slot.value).into()));
         }
 
-        let outputs = self.session.run(inputs)?;
+        let mut outputs = self.session.run(inputs)?;
         let logits = outputs[0].try_extract_array::<f32>()?.into_owned();
-        for ((_, kv), present) in self
-            .past_key_values
-            .iter_mut()
-            .zip(outputs.values().skip(1))
-        {
-            *kv = present
-                .try_extract_array::<P>()?
-                .into_owned()
-                .into_dimensionality::<Ix4>()
-                .expect("KV cache tensor should be 4D");
+        for slot in &mut self.past_key_values {
+            slot.value = outputs
+                .remove(&slot.output_name)
+                .expect("output presence checked in init_past_key_values");
         }
         Ok(logits)
     }
