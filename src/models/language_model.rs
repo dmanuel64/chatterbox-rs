@@ -1,10 +1,11 @@
-//! Chatterbox-Turbo's `language_model.onnx`: text embeddings + conditioning to speech tokens,
-//! generated autoregressively via a KV cache.
+//! Chatterbox-Turbo's `language_model.onnx`: text embeddings + conditioning to
+//! speech tokens, generated autoregressively via a KV cache.
 
 use crate::models::model::{self, Metadata as BaseMetadata, Precision};
 use ndarray::{Array, Array2, Array4, ArrayD, Ix4};
 use num_traits::Float;
 use ort::{
+    environment::Environment,
     session::{Session, builder::SessionBuilder},
     value::Tensor,
 };
@@ -26,7 +27,8 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
     }
 }
 
-/// A loaded `language_model.onnx` session, holding its own KV cache between autoregressive steps.
+/// A loaded `language_model.onnx` session, holding its own KV cache between
+/// autoregressive steps.
 #[derive(Debug)]
 pub struct Model<F: Float> {
     metadata: Metadata<F>,
@@ -47,18 +49,25 @@ impl<F: Float + 'static> model::Model<F> for Model<F> {
 }
 
 impl<P: Precision> Model<P> {
-    /// Loads the model with a default `ort` [`SessionBuilder`]. `num_kv_heads`/`head_dim` describe
-    /// the shape of this graph's KV cache tensors.
+    /// Loads the model with a default `ort` [`SessionBuilder`].
+    /// `num_kv_heads`/`head_dim` describe the shape of this graph's KV cache
+    /// tensors.
     pub fn load(
+        environment: &Environment,
         metadata: Metadata<P>,
         num_kv_heads: usize,
         head_dim: usize,
     ) -> Result<Self, model::Error> {
-        Self::load_with_builder(metadata, Session::builder()?, num_kv_heads, head_dim)
+        Self::load_with_builder(
+            metadata,
+            Session::builder(environment)?,
+            num_kv_heads,
+            head_dim,
+        )
     }
 
-    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to configure an execution
-    /// provider).
+    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to
+    /// configure an execution provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,
         mut builder: SessionBuilder,
@@ -74,9 +83,10 @@ impl<P: Precision> Model<P> {
         })
     }
 
-    /// Discovers this graph's `past_key_values.*` inputs and seeds each with a zero-length cache
-    /// tensor. Done by inspecting `session.inputs()` rather than hardcoding a layer count, so this
-    /// stays correct regardless of how many layers a given variant's graph actually has.
+    /// Discovers this graph's `past_key_values.*` inputs and seeds each with a
+    /// zero-length cache tensor. Done by inspecting `session.inputs()` rather
+    /// than hardcoding a layer count, so this stays correct regardless of how
+    /// many layers a given variant's graph actually has.
     pub(crate) fn init_past_key_values(&mut self, batch_size: usize) {
         self.past_key_values.clear();
         for input in self
