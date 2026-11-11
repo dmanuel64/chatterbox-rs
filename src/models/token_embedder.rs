@@ -2,7 +2,7 @@
 //! `language_model` as `inputs_embeds`.
 
 use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
-use ndarray::ArrayD;
+use ndarray::{Array2, ArrayD};
 use num_traits::Float;
 use ort::{
     environment::Environment,
@@ -32,6 +32,7 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 pub struct Model<P: RestrictedPrecision> {
     metadata: Metadata<P>,
     session: Session,
+    speech_table: Option<Array2<f32>>,
 }
 
 impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
@@ -59,6 +60,7 @@ impl<P: RestrictedPrecision> Model<P> {
         Ok(Self {
             metadata,
             session: builder.commit_from_file(metadata.graph_file())?,
+            speech_table: None,
         })
     }
 
@@ -71,5 +73,50 @@ impl<P: RestrictedPrecision> Model<P> {
         ])?;
         let output = outputs[0].try_extract_array::<P>()?;
         Ok(output.into_owned())
+    }
+
+    /// Embeds every id in `0..num_ids` once and keeps the results as an f32
+    /// lookup table. Each id is its own length-1 sequence (shape `[num_ids, 1]`),
+    /// exactly how generation calls this graph one token at a time.
+    pub(crate) fn build_speech_table(&mut self, num_ids: usize) -> Result<(), model::Error> {
+        let ids = Array2::from_shape_fn((num_ids, 1), |(i, _)| i as i64).into_dyn();
+        let embeds = model::to_f32(self.embed_tokens(ids)?); // [num_ids, 1, hidden]
+        let hidden = *embeds
+            .shape()
+            .last()
+            .expect("embeddings should have a hidden dim");
+        let table = embeds
+            .into_shape_with_order((num_ids, hidden))
+            .expect("one embedding row per id");
+        self.speech_table = Some(table);
+        Ok(())
+    }
+
+    /// Embeds speech tokens during generation: a table lookup when every id is in
+    /// the table, falling back to running the graph otherwise.
+    pub(crate) fn embed_speech_tokens(
+        &mut self,
+        input_ids: &ArrayD<i64>,
+    ) -> Result<ArrayD<f32>, model::Error> {
+        if let Some(table) = &self.speech_table
+            && input_ids
+                .iter()
+                .all(|id| (0..table.nrows() as i64).contains(id))
+        {
+            let hidden = table.ncols();
+            let mut out = Vec::with_capacity(input_ids.len() * hidden);
+            for &id in input_ids {
+                out.extend_from_slice(
+                    table
+                        .row(id as usize)
+                        .as_slice()
+                        .expect("table rows are contiguous"),
+                );
+            }
+            let mut shape = input_ids.shape().to_vec();
+            shape.push(hidden);
+            return Ok(ArrayD::from_shape_vec(shape, out).expect("one row per id"));
+        }
+        Ok(model::to_f32(self.embed_tokens(input_ids.clone())?))
     }
 }

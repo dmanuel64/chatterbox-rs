@@ -154,7 +154,7 @@ where
                 .expect("TOKENIZER_PATH lock poisoned")
                 .clone(),
         )?;
-        Ok(Self {
+        let mut model = Self {
             tokenizer,
             speech_encoder: if let Some(builder) = options.speech_encoder_session_builder {
                 speech_encoder::Model::load_with_builder(options.speech_encoder, builder)?
@@ -192,7 +192,11 @@ where
             sample_rate: options.sample_rate,
             num_kv_heads: options.num_kv_heads,
             head_dim: options.head_dim,
-        })
+        };
+        model
+            .token_embedder
+            .build_speech_table((Self::STOP_SPEECH_TOKEN + 1) as usize)?;
+        Ok(model)
     }
 
     /// Decodes, resamples, and encodes a reference clip (any format supported
@@ -293,8 +297,13 @@ where
         for tokens_generated in 0..options.max_new_tokens.get() {
             // token_embedder's output is typed T; normalized to f32 immediately
             // since that's what language_model's inputs_embeds always needs
-            let mut input_embeds =
-                model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?);
+            let mut input_embeds = if tokens_generated == 0 {
+                // Prefill: the text prompt, embedded by the graph once per request.
+                model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?)
+            } else {
+                // Generation: speech tokens, looked up in the prebuilt table.
+                self.token_embedder.embed_speech_tokens(&input_ids)?
+            };
 
             if tokens_generated == 0 {
                 input_embeds = concatenate![Axis(1), voice.condition_embeddings, input_embeds];
