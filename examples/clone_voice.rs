@@ -7,7 +7,7 @@ use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use half::f16;
 use ort::{environment::Environment, session::Session};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 /// Clone a voice from a reference clip and synthesize new speech from text.
 #[derive(Parser)]
@@ -68,6 +68,7 @@ async fn run<L: model::Precision>(
         repetition_penalty: args.repetition_penalty.try_into()?,
     };
 
+    let load_start = Instant::now();
     let mut chatterbox = ChatterboxTurbo::load_with_options(
         environment,
         LoadOptions {
@@ -99,7 +100,10 @@ async fn run<L: model::Precision>(
             head_dim: 64,
         },
     )?;
+    println!("Loaded in {:?}", load_start.elapsed());
+    let generate_start = Instant::now();
     chatterbox.generate_with_files(&args.text, args.reference_audio, args.output, options)?;
+    println!("Generated in {:?}", generate_start.elapsed());
 
     Ok(())
 }

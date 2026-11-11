@@ -92,6 +92,18 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
     }
 }
 
+/// A reference voice, encoded once by the speech encoder and reusable across
+/// any number of [`ChatterboxTurbo::generate_with_voice`] calls.
+#[derive(Debug, Clone)]
+pub struct VoiceConditioning {
+    /// Prepended to the text embeddings before the language model's first step.
+    condition_embeddings: ArrayD<f32>,
+    /// The reference clip's own speech tokens, prepended in `decode_audio`.
+    prompt_token: ArrayD<i64>,
+    speaker_embeddings: ArrayD<f32>,
+    speaker_features: ArrayD<f32>,
+}
+
 /// The full TTS pipeline: text + a reference voice clip to generated speech.
 /// Owns one loaded instance of each of the four ONNX components.
 #[derive(Debug)]
@@ -183,6 +195,33 @@ where
         })
     }
 
+    /// Decodes, resamples, and encodes a reference clip (any format supported
+    /// by the `audio` module) into a reusable [`VoiceConditioning`].
+    pub fn prepare_voice(
+        &mut self,
+        reference_audio_bytes: Vec<u8>,
+    ) -> Result<VoiceConditioning, Error> {
+        let audio_values = self.prepare_audio_input(reference_audio_bytes)?;
+        let encoding = self
+            .speech_encoder
+            .encode_reference_audio(model::from_f32(audio_values))?;
+        Ok(VoiceConditioning {
+            condition_embeddings: model::to_f32(encoding.condition_embeddings),
+            prompt_token: encoding.prompt_token,
+            speaker_embeddings: model::to_f32(encoding.speaker_embeddings),
+            speaker_features: model::to_f32(encoding.speaker_features),
+        })
+    }
+
+    /// Like [`Self::prepare_voice`], but reads the reference audio from a file
+    /// path.
+    pub fn prepare_voice_from_file(
+        &mut self,
+        reference_audio_path: impl AsRef<Path>,
+    ) -> Result<VoiceConditioning, Error> {
+        self.prepare_voice(fs::read(reference_audio_path)?)
+    }
+
     fn prepare_audio_input(&self, reference_audio_bytes: Vec<u8>) -> Result<ArrayD<f32>, Error> {
         Ok(crate::audio::load(reference_audio_bytes, self.sample_rate)?)
     }
@@ -231,16 +270,25 @@ where
         reference_audio_bytes: Vec<u8>,
         options: GenerateOptions,
     ) -> Result<Vec<f32>, Error> {
-        let audio_values = self.prepare_audio_input(reference_audio_bytes)?;
+        let voice = self.prepare_voice(reference_audio_bytes)?;
+        self.generate_with_voice(text, &voice, options)
+    }
+
+    /// Generates speech for `text`, using the voice from
+    /// `reference_audio_bytes` (any format supported by the `audio` module).
+    /// Returns mono [[`f32`]] samples at `self.sample_rate`.
+    pub fn generate_with_voice(
+        &mut self,
+        text: &str,
+        voice: &VoiceConditioning,
+        options: GenerateOptions,
+    ) -> Result<Vec<f32>, Error> {
         let mut input_ids = self.prepare_text_input(text)?;
 
         let mut generate_tokens = array![[Self::START_SPEECH_TOKEN]].into_dyn();
         let mut attention_mask = Array2::default(Ix2::default());
         let mut position_ids: Array2<i64> = Array::default(Ix2::default());
         let mut batch_size = 0;
-        let mut speaker_embeddings: Option<ArrayD<f32>> = None;
-        let mut speaker_features: Option<ArrayD<f32>> = None;
-        let mut prompt_token: Option<ArrayD<i64>> = None;
 
         for tokens_generated in 0..options.max_new_tokens.get() {
             // token_embedder's output is typed T; normalized to f32 immediately
@@ -249,17 +297,7 @@ where
                 model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?);
 
             if tokens_generated == 0 {
-                let encoding = self
-                    .speech_encoder
-                    .encode_reference_audio(model::from_f32(audio_values.clone()))?;
-                prompt_token = Some(encoding.prompt_token);
-                speaker_embeddings = Some(model::to_f32(encoding.speaker_embeddings));
-                speaker_features = Some(model::to_f32(encoding.speaker_features));
-                input_embeds = concatenate![
-                    Axis(1),
-                    model::to_f32(encoding.condition_embeddings),
-                    input_embeds
-                ];
+                input_embeds = concatenate![Axis(1), voice.condition_embeddings, input_embeds];
 
                 // Initialize cache and LLM inputs
                 let &[b, seq_len, ..] = input_embeds.shape() else {
@@ -308,10 +346,10 @@ where
             ];
         }
         let wav = self.conditional_decoder.decode_audio(
-            prompt_token.expect("prompt token to be cached"),
+            voice.prompt_token.clone(),
             &generate_tokens,
-            model::from_f32(speaker_embeddings.expect("embeddings to be cached")),
-            model::from_f32(speaker_features.expect("features to be cached")),
+            model::from_f32(voice.speaker_embeddings.clone()),
+            model::from_f32(voice.speaker_features.clone()),
         )?;
         Ok(model::to_f32(wav).into_iter().collect())
     }

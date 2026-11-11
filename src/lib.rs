@@ -21,5 +21,6 @@ pub type ChatterboxError = chatterbox_turbo::Error;
 
 pub use chatterbox_turbo::{
     ChatterboxTurbo, GenerateOptions, LoadOptions, ParalinguisticStrExt, ParalinguisticTag,
+    VoiceConditioning,
 };
 pub use models::{conditional_decoder, language_model, model, speech_encoder, token_embedder};
