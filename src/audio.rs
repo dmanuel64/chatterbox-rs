@@ -15,7 +15,8 @@ use thiserror::Error;
 /// Errors that can occur while loading or writing audio.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Decoding the input format (probing, demuxing, or the codec itself) failed.
+    /// Decoding the input format (probing, demuxing, or the codec itself)
+    /// failed.
     #[error("failed to decode reference audio: {0}")]
     Symphonia(#[from] symphonia::core::errors::Error),
     /// The input file has no audio track to decode.
@@ -35,8 +36,8 @@ pub enum Error {
     Wav(#[from] hound::Error),
 }
 
-/// Loads an audio file of any supported format into mono [`f32`] samples at `target_sample_rate`,
-/// shaped `(1, num_samples)`.
+/// Loads an audio file of any supported format into mono [`f32`] samples at
+/// `target_sample_rate`, shaped `(1, num_samples)`.
 pub fn load(bytes: Vec<u8>, target_sample_rate: u32) -> Result<ArrayD<f32>, Error> {
     let (samples, sample_rate) = decode_to_mono_f32(bytes)?;
     let samples = if sample_rate == target_sample_rate {
@@ -50,7 +51,8 @@ pub fn load(bytes: Vec<u8>, target_sample_rate: u32) -> Result<ArrayD<f32>, Erro
         .into_dyn())
 }
 
-/// Writes mono [`f32`] samples to a WAV file at `output_path`, at `sample_rate`.
+/// Writes mono [`f32`] samples to a WAV file at `output_path`, at
+/// `sample_rate`.
 pub fn write(
     samples: &[f32],
     sample_rate: u32,

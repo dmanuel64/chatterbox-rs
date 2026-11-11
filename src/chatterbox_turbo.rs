@@ -7,7 +7,7 @@ use crate::{
 };
 use ndarray::{concatenate, prelude::*};
 use num_traits::Float;
-use ort::session::builder::SessionBuilder;
+use ort::{environment::Environment, session::builder::SessionBuilder};
 use std::{fmt::Display, fs, num::NonZero, path::Path};
 use thiserror::Error;
 use tokenizers::Tokenizer;
@@ -33,10 +33,11 @@ pub enum Error {
     Model(#[from] crate::models::model::Error),
 }
 
-/// Configures [`ChatterboxTurbo::load_with_options`]: which [`model::Variant`] each of the four
-/// components loads, and an optional `ort` [`SessionBuilder`] per component (e.g. to select an
-/// execution provider). `S`/`T`/`L`/`C` are the precisions of the speech encoder, token embedder,
-/// language model, and conditional decoder respectively.
+/// Configures [`ChatterboxTurbo::load_with_options`]: which [`model::Variant`]
+/// each of the four components loads, and an optional `ort` [`SessionBuilder`]
+/// per component (e.g. to select an execution provider). `S`/`T`/`L`/`C` are
+/// the precisions of the speech encoder, token embedder, language model, and
+/// conditional decoder respectively.
 pub struct LoadOptions<S, T, L, C>
 where
     S: Float,
@@ -54,9 +55,11 @@ where
     pub conditional_decoder_session_builder: Option<SessionBuilder>,
     /// Sample rate (Hz) of the generated waveform.
     pub sample_rate: u32,
-    /// Number of KV heads in the language model's attention, for sizing its KV cache.
+    /// Number of KV heads in the language model's attention, for sizing its KV
+    /// cache.
     pub num_kv_heads: usize,
-    /// Per-head dimension in the language model's attention, for sizing its KV cache.
+    /// Per-head dimension in the language model's attention, for sizing its KV
+    /// cache.
     pub head_dim: usize,
 }
 
@@ -86,8 +89,8 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
     }
 }
 
-/// The full TTS pipeline: text + a reference voice clip to generated speech. Owns one loaded
-/// instance of each of the four ONNX components.
+/// The full TTS pipeline: text + a reference voice clip to generated speech.
+/// Owns one loaded instance of each of the four ONNX components.
 #[derive(Debug)]
 pub struct ChatterboxTurbo<S, T, L, C>
 where
@@ -107,9 +110,10 @@ where
 }
 
 impl ChatterboxTurbo<f32, f32, f32, f32> {
-    /// Loads all four components at [`f32`]/`int8` defaults (see [`LoadOptions::default`]).
-    pub fn load() -> Result<Self, Error> {
-        Self::load_with_options(LoadOptions::default())
+    /// Loads all four components at [`f32`]/`int8` defaults (see
+    /// [`LoadOptions::default`]).
+    pub fn load(environment: &Environment) -> Result<Self, Error> {
+        Self::load_with_options(environment, LoadOptions::default())
     }
 }
 
@@ -123,9 +127,12 @@ where
     const START_SPEECH_TOKEN: i64 = 6561;
     const STOP_SPEECH_TOKEN: i64 = 6562;
 
-    /// Loads all four components per `options`, using each component's own [`SessionBuilder`] when
-    /// provided, or an `ort` default otherwise.
-    pub fn load_with_options(options: LoadOptions<S, T, L, C>) -> Result<Self, Error> {
+    /// Loads all four components per `options`, using each component's own
+    /// [`SessionBuilder`] when provided, or an `ort` default otherwise.
+    pub fn load_with_options(
+        environment: &Environment,
+        options: LoadOptions<S, T, L, C>,
+    ) -> Result<Self, Error> {
         let tokenizer = Tokenizer::from_file(
             config::TOKENIZER_PATH
                 .read()
@@ -137,12 +144,12 @@ where
             speech_encoder: if let Some(builder) = options.speech_encoder_session_builder {
                 speech_encoder::Model::load_with_builder(options.speech_encoder, builder)?
             } else {
-                speech_encoder::Model::load(options.speech_encoder)?
+                speech_encoder::Model::load(environment, options.speech_encoder)?
             },
             token_embedder: if let Some(builder) = options.token_embedder_session_builder {
                 token_embedder::Model::load_with_builder(options.token_embedder, builder)?
             } else {
-                token_embedder::Model::load(options.token_embedder)?
+                token_embedder::Model::load(environment, options.token_embedder)?
             },
             language_model: if let Some(builder) = options.language_model_session_builder {
                 language_model::Model::load_with_builder(
@@ -153,6 +160,7 @@ where
                 )?
             } else {
                 language_model::Model::load(
+                    environment,
                     options.language_model,
                     options.num_kv_heads,
                     options.head_dim,
@@ -162,7 +170,7 @@ where
             {
                 conditional_decoder::Model::load_with_builder(options.conditional_decoder, builder)?
             } else {
-                conditional_decoder::Model::load(options.conditional_decoder)?
+                conditional_decoder::Model::load(environment, options.conditional_decoder)?
             },
             sample_rate: options.sample_rate,
             num_kv_heads: options.num_kv_heads,
@@ -183,8 +191,9 @@ where
             .into_dyn())
     }
 
-    /// Slices out the last position's logits, applies repetition penalty against every token
-    /// generated so far, and greedily picks the highest-scoring next token.
+    /// Slices out the last position's logits, applies repetition penalty
+    /// against every token generated so far, and greedily picks the
+    /// highest-scoring next token.
     fn sample_next_token(
         generate_tokens: &ArrayRefD<i64>,
         logits: ArrayD<f32>,
@@ -208,8 +217,9 @@ where
             .insert_axis(last_axis)
     }
 
-    /// Generates speech for `text`, using the voice from `reference_audio_bytes` (any format
-    /// supported by the `audio` module). Returns mono [[`f32`]] samples at `self.sample_rate`.
+    /// Generates speech for `text`, using the voice from
+    /// `reference_audio_bytes` (any format supported by the `audio` module).
+    /// Returns mono [[`f32`]] samples at `self.sample_rate`.
     pub fn generate(
         &mut self,
         text: &str,
@@ -228,8 +238,8 @@ where
         let mut prompt_token: Option<ArrayD<i64>> = None;
 
         for tokens_generated in 0..options.max_new_tokens.get() {
-            // token_embedder's output is typed T; normalized to f32 immediately since that's
-            // what language_model's inputs_embeds always needs
+            // token_embedder's output is typed T; normalized to f32 immediately
+            // since that's what language_model's inputs_embeds always needs
             let mut input_embeds =
                 model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?);
 
@@ -277,9 +287,10 @@ where
             ];
             position_ids = position_ids.slice(s![.., -1..]).to_owned() + 1;
         }
-        // decode_audio unconditionally strips the last token, assuming it's the stop token.
-        // If we hit max_new_tokens without ever sampling one, append it so a real generated
-        // token doesn't get silently discarded instead.
+        // decode_audio unconditionally strips the last token, assuming it's the
+        // stop token. If we hit max_new_tokens without ever sampling one,
+        // append it so a real generated token doesn't get silently discarded
+        // instead.
         if !generate_tokens
             .slice(s![.., -1..])
             .iter()
@@ -311,7 +322,8 @@ where
         self.generate(text, target_audio_bytes, options)
     }
 
-    /// Like [`Self::generate`], but writes the result to a WAV file instead of returning samples.
+    /// Like [`Self::generate`], but writes the result to a WAV file instead of
+    /// returning samples.
     pub fn generate_with_output(
         &mut self,
         text: &str,
@@ -327,8 +339,9 @@ where
         )?)
     }
 
-    /// Combines [`Self::generate_with_ref_file`] and [`Self::generate_with_output`]: reads the
-    /// reference audio from a path and writes the result to a WAV file.
+    /// Combines [`Self::generate_with_ref_file`] and
+    /// [`Self::generate_with_output`]: reads the reference audio from a path
+    /// and writes the result to a WAV file.
     pub fn generate_with_files(
         &mut self,
         text: &str,
@@ -345,9 +358,11 @@ where
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenerateOptions {
-    /// Upper bound on generated speech tokens, before decoding stops even without a stop token.
+    /// Upper bound on generated speech tokens, before decoding stops even
+    /// without a stop token.
     pub max_new_tokens: NonZero<u32>,
-    /// Penalty applied to logits of tokens already generated, discouraging repetition.
+    /// Penalty applied to logits of tokens already generated, discouraging
+    /// repetition.
     pub repetition_penalty: tf32::StrictlyPositiveFinite,
 }
 
@@ -388,8 +403,9 @@ impl RepetitionPenaltyLogitsProcessor {
     }
 }
 
-/// A bracketed tag (e.g. `[angry]`) Chatterbox recognizes when prepended to input text,
-/// conditioning generation on that emotion or delivery style. See [`ParalinguisticStrExt`].
+/// A bracketed tag (e.g. `[angry]`) Chatterbox recognizes when prepended to
+/// input text, conditioning generation on that emotion or delivery style. See
+/// [`ParalinguisticStrExt`].
 #[derive(Debug, Clone, Copy)]
 pub enum ParalinguisticTag {
     /// `[angry]`
@@ -465,15 +481,16 @@ impl Display for ParalinguisticTag {
     }
 }
 
-/// Extension trait for prepending [`ParalinguisticTag`]s to text before passing it to
-/// [`ChatterboxTurbo::generate`].
+/// Extension trait for prepending [`ParalinguisticTag`]s to text before passing
+/// it to [`ChatterboxTurbo::generate`].
 pub trait ParalinguisticStrExt {
-    /// Prepends `tag` to the beginning of the text, conditioning the whole utterance on it.
+    /// Prepends `tag` to the beginning of the text, conditioning the whole
+    /// utterance on it.
     fn with_tag(&self, tag: ParalinguisticTag) -> String {
         self.with_tags(std::iter::once(tag))
     }
-    /// Prepends `tags` (in order) to the beginning of the text, conditioning the whole utterance
-    /// on all of them.
+    /// Prepends `tags` (in order) to the beginning of the text, conditioning
+    /// the whole utterance on all of them.
     fn with_tags(&self, tags: impl IntoIterator<Item = ParalinguisticTag>) -> String;
 }
 

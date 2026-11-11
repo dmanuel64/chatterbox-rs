@@ -1,6 +1,9 @@
 # `chatterbox-rs`
 
-A Rust port of [ResembleAI's Chatterbox](https://github.com/resemble-ai/chatterbox) text-to-speech pipeline, running its components as exported ONNX graphs through the [`ort`](https://ort.pyke.io/) crate.
+A Rust port of [ResembleAI's
+Chatterbox](https://github.com/resemble-ai/chatterbox) text-to-speech pipeline,
+running its components as exported ONNX graphs through the
+[`ort`](https://ort.pyke.io/) crate.
 
 ## Table of Contents
 
@@ -11,6 +14,7 @@ A Rust port of [ResembleAI's Chatterbox](https://github.com/resemble-ai/chatterb
   - [Quickstart](#quickstart)
     - [With `download` enabled](#with-download-enabled)
     - [Without `download`](#without-download)
+    - [Examples](#examples)
 
 ## Models Support Status
 
@@ -35,11 +39,16 @@ A Rust port of [ResembleAI's Chatterbox](https://github.com/resemble-ai/chatterb
 
 ## Quickstart
 
-Chatterbox-Turbo needs four ONNX graphs (`speech_encoder`, `embed_tokens`, `language_model`, `conditional_decoder`) plus a `tokenizer.json`, all pulled from the [`ResembleAI/chatterbox-turbo-ONNX`](https://huggingface.co/ResembleAI/chatterbox-turbo-ONNX) Hugging Face repo. There are two ways to get them onto disk.
+Chatterbox-Turbo needs four ONNX graphs (`speech_encoder`, `embed_tokens`,
+`language_model`, `conditional_decoder`) plus a `tokenizer.json`, all pulled
+from the
+[`ResembleAI/chatterbox-turbo-ONNX`](https://huggingface.co/ResembleAI/chatterbox-turbo-ONNX)
+Hugging Face repo. There are two ways to get them onto disk.
 
 ### With `download` enabled
 
-Add the `download` feature. This pulls in an async downloader, so you'll also need an async runtime like `tokio`:
+Add the `download` feature. This pulls in an async downloader, so you'll also
+need an async runtime like `tokio`:
 
 ```bash
 cargo add chatterbox-rs --features download
@@ -68,9 +77,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Without `download`
 
-Download the graphs yourself from the `onnx/` folder of [`ResembleAI/chatterbox-turbo-ONNX`](https://huggingface.co/ResembleAI/chatterbox-turbo-ONNX/tree/main/onnx) (each graph is a `<name>.onnx` + `<name>.onnx_data` pair — both files are required) along with `tokenizer.json` from the repo root. For the default `int8` variant that's `speech_encoder_quantized`, `embed_tokens_quantized`, `language_model_quantized`, and `conditional_decoder_quantized`.
+Download the graphs yourself from the `onnx/` folder of
+[`ResembleAI/chatterbox-turbo-ONNX`](https://huggingface.co/ResembleAI/chatterbox-turbo-ONNX/tree/main/onnx)
+(each graph is a `<name>.onnx` + `<name>.onnx_data` pair — both files are
+required) along with `tokenizer.json` from the repo root. For the default `int8`
+variant that's `speech_encoder_quantized`, `embed_tokens_quantized`,
+`language_model_quantized`, and `conditional_decoder_quantized`.
 
-Point `config::ONNX_DIR` and `config::TOKENIZER_PATH` at wherever you put them before loading:
+Point `config::ONNX_DIR` and `config::TOKENIZER_PATH` at wherever you put them
+before loading:
 
 ```bash
 cargo add chatterbox-rs
@@ -95,4 +110,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`ChatterboxTurbo::load()` always expects the `int8` variant at all four components; see [`ChatterboxTurbo::load_with_options`](src/chatterbox_turbo.rs) to load a different `model::Variant` per component (e.g. `fp16` for just the language model, as `examples/clone_voice.rs` does).
+`ChatterboxTurbo::load()` always expects the `int8` variant at all four
+components; see [`ChatterboxTurbo::load_with_options`](src/chatterbox_turbo.rs)
+to load a different `model::Variant` per component (e.g. `fp16` for just the
+language model, as `examples/clone_voice.rs` does).
+
+### Examples
+
+If you would like to quickly test out `chatterbox-rs`, you can run the existing
+example in the repo:
+
+```shell
+cargo run --release --example clone_voice --features download,cuda ./reference.wav "Hello from chatterbox-rs!" ./output.wav
+```

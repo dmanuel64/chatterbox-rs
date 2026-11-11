@@ -1,8 +1,9 @@
-//! Shared traits and types every ONNX model wrapper (`speech_encoder`, `token_embedder`,
-//! `language_model`, `conditional_decoder`) is built on: [`Model`]/[`Metadata`] for locating and
-//! describing a graph on disk, [`Variant`] for naming a graph's quantization/precision, and the
-//! [`Precision`]/[`RestrictedPrecision`] bounds controlling which Rust float types a model can
-//! actually be instantiated with.
+//! Shared traits and types every ONNX model wrapper (`speech_encoder`,
+//! `token_embedder`, `language_model`, `conditional_decoder`) is built on:
+//! [`Model`]/[`Metadata`] for locating and describing a graph on disk,
+//! [`Variant`] for naming a graph's quantization/precision, and the
+//! [`Precision`]/[`RestrictedPrecision`] bounds controlling which Rust float
+//! types a model can actually be instantiated with.
 
 use crate::config;
 use half::f16;
@@ -20,7 +21,8 @@ use thiserror::Error;
 /// Errors that can occur while loading or running a model.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// The requested `kind`/`float_type` combination has no matching exported graph.
+    /// The requested `kind`/`float_type` combination has no matching exported
+    /// graph.
     #[error("incompatible model variant: TODO")]
     IncompatibleVariant { kind: Kind, float_type: TypeId },
     /// The underlying `ort` session failed to load or run.
@@ -62,8 +64,9 @@ pub enum WeightPacking {
     Bit4,
 }
 
-/// A named combination of quantization [`Kind`] and Rust float type, identifying one specific
-/// exported ONNX graph (e.g. `int8` at `F = f32`, or `q4_fp16` at `F = f16`).
+/// A named combination of quantization [`Kind`] and Rust float type,
+/// identifying one specific exported ONNX graph (e.g. `int8` at `F = f32`, or
+/// `q4_fp16` at `F = f16`).
 #[derive(Debug, Clone, Copy, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -95,9 +98,10 @@ impl Variant<f16> {
 }
 
 impl<F: Float + 'static> Variant<F> {
-    /// Builds a variant for any [`Precision`] `F`. Only available with the `custom-variants`
-    /// feature, since the official graphs are only ever proven to exist as [`f32`] or [`half::f16`]. Use
-    /// the associated constants (e.g. [`Variant::<f32>::FP32`]) for those.
+    /// Builds a variant for any [`Precision`] `F`. Only available with the
+    /// `custom-variants` feature, since the official graphs are only ever
+    /// proven to exist as [`f32`] or [`half::f16`]. Use the associated
+    /// constants (e.g. [`Variant::<f32>::FP32`]) for those.
     #[cfg(feature = "custom-variants")]
     pub const fn new(kind: Kind) -> Self {
         Self::new_inner(kind)
@@ -157,16 +161,16 @@ impl<F: Float + 'static> Display for Variant<F> {
     }
 }
 
-/// Identifies which on-disk ONNX graph a model wraps: a filename prefix (unique per component)
-/// plus the [`Variant`] to load.
+/// Identifies which on-disk ONNX graph a model wraps: a filename prefix (unique
+/// per component) plus the [`Variant`] to load.
 pub trait Metadata<F: Float + 'static> {
     /// The component's base filename, e.g. `"language_model"`.
     fn filename_prefix(&self) -> &'static str;
     /// The quantization/precision variant to load.
     fn variant(&self) -> Variant<F>;
 
-    /// The full filename (no extension), combining [`Self::filename_prefix`] and the variant's
-    /// suffix.
+    /// The full filename (no extension), combining [`Self::filename_prefix`]
+    /// and the variant's suffix.
     fn filename(&self) -> String {
         format!(
             "{}{}",
@@ -183,7 +187,8 @@ pub trait Metadata<F: Float + 'static> {
         onnx_dir.join(PathBuf::from(self.filename()).with_extension("onnx"))
     }
 
-    /// Path to this graph's external `.onnx_data` weights file under [`config::ONNX_DIR`].
+    /// Path to this graph's external `.onnx_data` weights file under
+    /// [`config::ONNX_DIR`].
     #[allow(unused)]
     fn weights_file(&self) -> PathBuf {
         let onnx_dir = config::ONNX_DIR
@@ -193,9 +198,9 @@ pub trait Metadata<F: Float + 'static> {
     }
 }
 
-/// A loaded ONNX model wrapper. Implemented by each component's own `Model<P>` type
-/// (`speech_encoder::Model`, `token_embedder::Model`, `language_model::Model`,
-/// `conditional_decoder::Model`).
+/// A loaded ONNX model wrapper. Implemented by each component's own `Model<P>`
+/// type (`speech_encoder::Model`, `token_embedder::Model`,
+/// `language_model::Model`, `conditional_decoder::Model`).
 pub trait Model<F: Float> {
     /// The underlying `ort` session.
     fn session(&self) -> &Session;
@@ -211,37 +216,40 @@ impl<F: Float + 'static> Display for dyn Model<F> {
 }
 
 trait_set::trait_set! {
-    /// Floating-point types `ort` can build a tensor from. The baseline bound for every model;
-    /// [`RestrictedPrecision`] narrows this further for components proven to always be [`f32`].
+    /// Floating-point types `ort` can build a tensor from. The baseline bound
+    /// for every model; [`RestrictedPrecision`] narrows this further for
+    /// components proven to always be [`f32`].
     pub trait Precision = Float + PrimitiveTensorElementType + Debug + 'static;
 }
 
 #[cfg(feature = "custom-variants")]
 trait_set::trait_set! {
-    /// A precision a model's own activation tensors can actually be constructed as. See the
-    /// module-level comment above this item for the full explanation.
+    /// A precision a model's own activation tensors can actually be constructed
+    /// as. See the module-level comment above this item for the full
+    /// explanation.
     pub trait RestrictedPrecision = Precision + FromPrimitive;
 }
 
 #[cfg(not(feature = "custom-variants"))]
-/// A precision a model's own activation tensors can actually be constructed as. See the
-/// module-level comment above this item for the full explanation.
+/// A precision a model's own activation tensors can actually be constructed as.
+/// See the module-level comment above this item for the full explanation.
 pub trait RestrictedPrecision: Precision + FromPrimitive {}
 #[cfg(not(feature = "custom-variants"))]
 impl RestrictedPrecision for f32 {}
 
-/// Converts an array of any [`RestrictedPrecision`] to [`f32`], for combining tensors from two
-/// components whose own activation types may differ (e.g. `speech_encoder`'s `S` and
-/// `token_embedder`'s `T`) before handing them to a component with a fixed, proven dtype
-/// requirement of its own (`language_model`'s `inputs_embeds`, always [`f32`] regardless of variant).
+/// Converts an array of any [`RestrictedPrecision`] to [`f32`], for combining
+/// tensors from two components whose own activation types may differ (e.g.
+/// `speech_encoder`'s `S` and `token_embedder`'s `T`) before handing them to a
+/// component with a fixed, proven dtype requirement of its own
+/// (`language_model`'s `inputs_embeds`, always [`f32`] regardless of variant).
 pub fn to_f32<F: num_traits::ToPrimitive + Clone, D: ndarray::Dimension>(
     array: ndarray::Array<F, D>,
 ) -> ndarray::Array<f32, D> {
     array.mapv(|x| x.to_f32().expect("value should be representable as f32"))
 }
 
-/// The inverse of [`to_f32`]: converts [`f32`] back into whatever [`RestrictedPrecision`] a
-/// downstream component's own tensors actually need.
+/// The inverse of [`to_f32`]: converts [`f32`] back into whatever
+/// [`RestrictedPrecision`] a downstream component's own tensors actually need.
 pub fn from_f32<F: num_traits::FromPrimitive, D: ndarray::Dimension>(
     array: ndarray::Array<f32, D>,
 ) -> ndarray::Array<F, D> {

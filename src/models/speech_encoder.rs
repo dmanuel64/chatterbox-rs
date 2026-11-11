@@ -1,22 +1,26 @@
-//! Chatterbox-Turbo's `speech_encoder.onnx`: reference audio to conditioning embedding, prompt
-//! tokens, and speaker embedding/features.
+//! Chatterbox-Turbo's `speech_encoder.onnx`: reference audio to conditioning
+//! embedding, prompt tokens, and speaker embedding/features.
 
 use ndarray::ArrayD;
 use num_traits::Float;
 use ort::{
+    environment::Environment,
     session::{Session, builder::SessionBuilder},
     value::Tensor,
 };
 
 use crate::models::model::{self, Metadata as BaseMetadata, RestrictedPrecision};
 
-/// The four outputs of `speech_encoder.onnx`, read positionally. The three floating-point outputs are typed `P`, matching whatever
-/// [`RestrictedPrecision`] this model was loaded with (always [`f32`] for the official graphs, since
-/// only [`f32`] implements [`RestrictedPrecision`] without the `custom-variants` feature).
+/// The four outputs of `speech_encoder.onnx`, read positionally. The three
+/// floating-point outputs are typed `P`, matching whatever
+/// [`RestrictedPrecision`] this model was loaded with (always [`f32`] for the
+/// official graphs, since only [`f32`] implements [`RestrictedPrecision`]
+/// without the `custom-variants` feature).
 pub(crate) struct ReferenceAudioEncoding<P> {
     /// T3 conditioning embedding, prepended to the text embedding stream.
     pub condition_embeddings: ArrayD<P>,
-    /// The reference clip's own speech tokens, prepended to the generated ones in `decode_audio`.
+    /// The reference clip's own speech tokens, prepended to the generated ones
+    /// in `decode_audio`.
     pub prompt_token: ArrayD<i64>,
     pub speaker_embeddings: ArrayD<P>,
     pub speaker_features: ArrayD<P>,
@@ -58,12 +62,12 @@ impl<P: RestrictedPrecision> model::Model<P> for Model<P> {
 
 impl<P: RestrictedPrecision> Model<P> {
     /// Loads the model with a default `ort` [`SessionBuilder`].
-    pub fn load(metadata: Metadata<P>) -> Result<Self, model::Error> {
-        Self::load_with_builder(metadata, Session::builder()?)
+    pub fn load(environment: &Environment, metadata: Metadata<P>) -> Result<Self, model::Error> {
+        Self::load_with_builder(metadata, Session::builder(environment)?)
     }
 
-    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to configure an execution
-    /// provider).
+    /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to
+    /// configure an execution provider).
     pub fn load_with_builder(
         metadata: Metadata<P>,
         mut builder: SessionBuilder,
