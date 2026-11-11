@@ -29,7 +29,14 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
 }
 
 /// Where the language model's KV cache is kept between steps. Should match the
-/// execution provider the language model session runs on.
+/// device that actually runs the graph's attention (`GroupQueryAttention`),
+/// which reads and writes the cache.
+///
+/// Use [`KvCacheDevice::Cuda`] only with an fp16 graph (`fp16`/`q4f16`) on the
+/// CUDA execution provider. ONNX Runtime's CUDA attention kernel only supports
+/// fp16/bf16, so with an fp32 graph (`fp32`/`int8`/`q4`) attention falls back
+/// to the CPU even on CUDA, and a GPU-resident cache would be copied to the CPU
+/// and back on every step. Use [`KvCacheDevice::Cpu`] in every other case.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum KvCacheDevice {
     #[default]

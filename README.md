@@ -15,6 +15,7 @@ running its components as exported ONNX graphs through the
     - [With `download` enabled](#with-download-enabled)
     - [Without `download`](#without-download)
     - [Examples](#examples)
+  - [Choosing a variant (CPU vs. GPU)](#choosing-a-variant-cpu-vs-gpu)
 
 ## Models Support Status
 
@@ -60,9 +61,15 @@ use chatterbox_rs::{ChatterboxTurbo, GenerateOptions, model};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Downloads whatever's missing for the default (int8) variant into config::ONNX_DIR.
-    // Cheap to call on every run (already-downloaded files are skipped)
-    chatterbox_rs::downloader::download_missing(model::Variant::<f32>::INT8, false).await?;
+    // Downloads whatever's missing for the default (CPU) variants into config::ONNX_DIR:
+    // fp32 speech encoder/embedder/decoder and a q4 language model. Cheap to call on
+    // every run (already-downloaded files are skipped).
+    chatterbox_rs::downloader::download_missing_split(
+        model::Variant::<f32>::FP32,
+        model::Variant::<f32>::Q4,
+        false,
+    )
+    .await?;
 
     let mut chatterbox = ChatterboxTurbo::load()?;
     chatterbox.generate_with_files(
@@ -80,9 +87,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Download the graphs yourself from the `onnx/` folder of
 [`ResembleAI/chatterbox-turbo-ONNX`](https://huggingface.co/ResembleAI/chatterbox-turbo-ONNX/tree/main/onnx)
 (each graph is a `<name>.onnx` + `<name>.onnx_data` pair — both files are
-required) along with `tokenizer.json` from the repo root. For the default `int8`
-variant that's `speech_encoder_quantized`, `embed_tokens_quantized`,
-`language_model_quantized`, and `conditional_decoder_quantized`.
+required) along with `tokenizer.json` from the repo root. For the defaults
+that's `speech_encoder`, `embed_tokens`, `language_model_q4`, and
+`conditional_decoder`.
 
 Point `config::ONNX_DIR` and `config::TOKENIZER_PATH` at wherever you put them
 before loading:
@@ -110,10 +117,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`ChatterboxTurbo::load()` always expects the `int8` variant at all four
-components; see [`ChatterboxTurbo::load_with_options`](src/chatterbox_turbo.rs)
-to load a different `model::Variant` per component (e.g. `fp16` for just the
-language model, as `examples/clone_voice.rs` does).
+`ChatterboxTurbo::load` uses the CPU defaults (`q4` language model, `fp32` for
+the other three components). With the `cuda` feature,
+`ChatterboxTurbo::load_cuda(0)` uses the GPU preset instead (see [Choosing a
+variant](#choosing-a-variant-cpu-vs-gpu)). See
+[`ChatterboxTurbo::load_with_options`](src/chatterbox_turbo.rs) to load a
+different `model::Variant` per component.
+
+The ONNX Runtime environment is created and managed for you. If you need to
+configure it (environment-wide execution providers, logging, thread pools),
+build it with `chatterbox_rs::ort::init()` before loading and pass it to the
+`*_with_environment` loaders, as `examples/clone_voice.rs` does. ONNX Runtime
+allows only one environment per process, so do this before calling any other
+loader.
 
 ### Examples
 
@@ -121,5 +137,25 @@ If you would like to quickly test out `chatterbox-rs`, you can run the existing
 example in the repo:
 
 ```shell
-cargo run --release --example clone_voice --features download,cuda ./reference.wav "Hello from chatterbox-rs!" ./output.wav
+# CPU (defaults to the q4 language model)
+cargo run --release --example clone_voice --features download ./reference.wav "Hello from chatterbox-rs!" ./output.wav
+
+# CUDA GPU (defaults to the q4-fp16 language model)
+cargo run --release --example clone_voice --features download,cuda ./reference.wav "Hello from chatterbox-rs!" ./output.wav --cuda
 ```
+
+## Choosing a variant (CPU vs. GPU)
+
+The language model's variant decides which device it runs well on:
+
+| Variant                            | Computes in | Use on                           |
+| ---------------------------------- | ----------- | -------------------------------- |
+| `q4`                               | fp32        | **CPU** (default)                |
+| `fp32`                             | fp32        | CPU                              |
+| `int8`                             | fp32        | Not recommended                  |
+| `q4f16` (`q4-fp16` in the example) | fp16        | **CUDA** (default with `--cuda`) |
+| `fp16`                             | fp16        | CUDA                             |
+
+Set `LoadOptions::language_model_kv_device` to `KvCacheDevice::Cuda` only for an
+fp16 language model on CUDA (`LoadOptions::cuda` does this for you); keep
+`KvCacheDevice::Cpu` everywhere else.

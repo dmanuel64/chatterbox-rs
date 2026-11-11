@@ -6,9 +6,14 @@
 //! graphs through the `ort` crate.
 //!
 //! The main entry point is [`ChatterboxTurbo`]: [`ChatterboxTurbo::load`] to
-//! load the default ([`f32`]) model, then [`ChatterboxTurbo::generate`] (or one
-//! of its `_with_*` convenience variants) to synthesize speech from text and a
+//! load the default (CPU) model, then [`ChatterboxTurbo::generate`] (or one of
+//! its `_with_*` convenience variants) to synthesize speech from text and a
 //! reference voice clip.
+//!
+//! The ONNX Runtime environment is managed for you (see
+//! [`default_environment`]). To configure it yourself, build one with
+//! [`ort::init`] (re-exported as [`ort`], so the versions always match) and use
+//! the `*_with_environment` loaders.
 
 mod audio;
 pub mod chatterbox_turbo;
@@ -21,6 +26,10 @@ pub type ChatterboxError = chatterbox_turbo::Error;
 
 pub use chatterbox_turbo::{
     ChatterboxTurbo, GenerateOptions, LoadOptions, ParalinguisticStrExt, ParalinguisticTag,
-    VoiceConditioning,
+    VoiceConditioning, default_environment,
 };
+/// The `ort` crate this crate is built against, for configuring an
+/// [`ort::environment::Environment`] or [`ort::session::builder::SessionBuilder`]s
+/// without depending on (and version-matching) `ort` yourself.
+pub use ort;
 pub use models::{conditional_decoder, language_model, model, speech_encoder, token_embedder};

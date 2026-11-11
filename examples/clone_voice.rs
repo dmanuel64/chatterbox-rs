@@ -21,9 +21,15 @@ struct Args {
     /// Path to write the generated WAV file to
     output: PathBuf,
 
-    /// Model weight variant to use
-    #[arg(long, value_enum, default_value_t = ModelVariant::Fp32)]
-    variant: ModelVariant,
+    /// Language model weight variant to use. Defaults to q4 on CPU and q4-fp16
+    /// with --cuda.
+    ///
+    /// fp32, int8 and q4 are CPU variants: they run on CUDA, but CUDA's
+    /// attention kernel needs an fp16 graph, so with them attention falls back
+    /// to the CPU on every token. With --cuda, use fp16 or q4-fp16. Avoid int8
+    /// on CPU too: it can be several times slower per token than q4 or fp32.
+    #[arg(long, value_enum)]
+    variant: Option<ModelVariant>,
 
     /// Run speech_encoder/language_model/conditional_decoder on the CUDA
     /// execution provider. token_embedder is deliberately left off CUDA
@@ -69,7 +75,7 @@ async fn run<L: model::Precision>(
     };
 
     let load_start = Instant::now();
-    let mut chatterbox = ChatterboxTurbo::load_with_options(
+    let mut chatterbox = ChatterboxTurbo::load_with_environment_and_options(
         environment,
         LoadOptions {
             speech_encoder: speech_encoder::Metadata {
@@ -86,7 +92,10 @@ async fn run<L: model::Precision>(
             ),
             language_model: language_model::Metadata { variant },
             language_model_session_builder: None,
-            language_model_kv_device: if cfg!(feature = "cuda") && args.cuda {
+            language_model_kv_device: if cfg!(feature = "cuda")
+                && args.cuda
+                && std::any::TypeId::of::<L>() == std::any::TypeId::of::<f16>()
+            {
                 KvCacheDevice::Cuda { device_id: 0 }
             } else {
                 KvCacheDevice::Cpu
@@ -113,12 +122,18 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Args::parse();
 
-    let env = ort::init()
-        .with_execution_providers([
-            #[cfg(feature = "cuda")]
-            ort::ep::CUDA::default().build().error_on_failure(),
-        ])
-        .build()?;
+    #[allow(unused_mut)]
+    let mut env_builder = ort::init();
+    #[cfg(feature = "cuda")]
+    if args.cuda {
+        env_builder = env_builder
+            .with_execution_providers([ort::ep::CUDA::default().build().error_on_failure()]);
+    }
+    #[cfg(not(feature = "cuda"))]
+    if args.cuda {
+        eprintln!("warning: --cuda requires building with `--features cuda`; ignoring");
+    }
+    let env = env_builder.build()?;
 
     println!("Discovered execution provider devices:");
     for device in env.devices() {
@@ -132,7 +147,18 @@ async fn main() -> Result<()> {
         );
     }
 
-    match args.variant {
+    let variant = args.variant.unwrap_or(if args.cuda {
+        ModelVariant::Q4Fp16
+    } else {
+        ModelVariant::Q4
+    });
+    if args.cuda && !matches!(variant, ModelVariant::Fp16 | ModelVariant::Q4Fp16) {
+        eprintln!(
+            "warning: fp32/int8/q4 are CPU variants; on CUDA their attention runs on the CPU \
+             every token. Use --variant q4-fp16 or fp16 with --cuda."
+        );
+    }
+    match variant {
         ModelVariant::Fp32 => run(&env, model::Variant::<f32>::FP32, args).await,
         ModelVariant::Int8 => run(&env, model::Variant::<f32>::INT8, args).await,
         ModelVariant::Q4 => run(&env, model::Variant::<f32>::Q4, args).await,

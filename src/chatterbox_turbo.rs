@@ -9,7 +9,7 @@ use crate::{
 use ndarray::{concatenate, prelude::*};
 use num_traits::Float;
 use ort::{environment::Environment, session::builder::SessionBuilder};
-use std::{fmt::Display, fs, num::NonZero, path::Path};
+use std::{fmt::Display, fs, num::NonZero, path::Path, sync::Mutex};
 use thiserror::Error;
 use tokenizers::Tokenizer;
 use typed_floats::tf32;
@@ -34,7 +34,32 @@ pub enum Error {
     Model(#[from] crate::models::model::Error),
 }
 
-/// Configures [`ChatterboxTurbo::load_with_options`]: which [`model::Variant`]
+static DEFAULT_ENVIRONMENT: Mutex<Option<Environment>> = Mutex::new(None);
+
+/// The ONNX Runtime [`Environment`] used by every `load*` method that doesn't
+/// take one. ONNX Runtime allows only one environment per process, so it's
+/// built on first use and shared afterwards. Pass it to [`SessionBuilder`]s you
+/// build for [`LoadOptions`], so they share the environment too.
+///
+/// To configure the environment yourself (e.g. environment-wide execution
+/// providers or logging), build it with [`ort::init`] **before** calling anything
+/// in this crate, and use the `*_with_environment` methods. Once you've built
+/// one, this function returns an error, because ONNX Runtime refuses a second
+/// environment.
+pub fn default_environment() -> Result<Environment, Error> {
+    let mut slot = DEFAULT_ENVIRONMENT
+        .lock()
+        .expect("default environment lock poisoned");
+    if let Some(environment) = slot.as_ref() {
+        return Ok(environment.clone());
+    }
+    let environment = ort::init().build()?;
+    *slot = Some(environment.clone());
+    Ok(environment)
+}
+
+/// Configures [`ChatterboxTurbo::load_with_options`] (and
+/// [`ChatterboxTurbo::load_with_environment_and_options`]): which [`model::Variant`]
 /// each of the four components loads, and an optional `ort` [`SessionBuilder`]
 /// per component (e.g. to select an execution provider). `S`/`T`/`L`/`C` are
 /// the precisions of the speech encoder, token embedder, language model, and
@@ -69,26 +94,98 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
     fn default() -> Self {
         Self {
             speech_encoder: speech_encoder::Metadata {
-                variant: model::Variant::<f32>::INT8,
+                variant: model::Variant::<f32>::FP32,
             },
             speech_encoder_session_builder: None,
             token_embedder: token_embedder::Metadata {
-                variant: model::Variant::<f32>::INT8,
+                variant: model::Variant::<f32>::FP32,
             },
             token_embedder_session_builder: None,
             language_model: language_model::Metadata {
-                variant: model::Variant::<f32>::INT8,
+                variant: model::Variant::<f32>::Q4,
             },
             language_model_session_builder: None,
             language_model_kv_device: KvCacheDevice::default(),
             conditional_decoder: conditional_decoder::Metadata {
-                variant: model::Variant::<f32>::INT8,
+                variant: model::Variant::<f32>::FP32,
             },
             conditional_decoder_session_builder: None,
             sample_rate: 24000,
             num_kv_heads: 16,
             head_dim: 64,
         }
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
+impl LoadOptions<f32, f32, half::f16, f32> {
+    /// A preset for running on a CUDA GPU (`device_id`, usually `0`).
+    ///
+    /// - The language model uses the `q4f16` graph
+    ///   ([`model::Variant::<f16>::Q4_FP16`](model::Variant)). Use an fp16
+    ///   graph on CUDA: ONNX Runtime's CUDA `GroupQueryAttention` kernel only
+    ///   supports fp16/bf16, so with an fp32 graph every layer's attention
+    ///   falls back to the CPU and data crosses between the two on every
+    ///   generated token.
+    /// - The KV cache stays in GPU memory between steps
+    ///   ([`KvCacheDevice::Cuda`]).
+    /// - The speech encoder and conditional decoder run on CUDA at fp32.
+    /// - The token embedder stays on the CPU. It only runs once per request
+    ///   (speech tokens are looked up in a table built at load time), so the
+    ///   GPU would gain nothing there.
+    ///
+    /// Uses the crate's [`default_environment`]; see
+    /// [`Self::cuda_with_environment`] to supply your own.
+    pub fn cuda(device_id: i32) -> Result<Self, Error> {
+        Self::cuda_with_environment(&default_environment()?, device_id)
+    }
+
+    /// Like [`Self::cuda`], with session builders created from `environment`.
+    ///
+    /// Each session registers its own execution provider and ignores any set on
+    /// `environment`, so this works whether or not the environment already
+    /// registers CUDA.
+    pub fn cuda_with_environment(environment: &Environment, device_id: i32) -> Result<Self, Error> {
+        use ort::session::Session;
+
+        let cuda_builder = || -> Result<SessionBuilder, Error> {
+            Ok(Session::builder(environment)?
+                .with_no_environment_execution_providers()
+                .and_then(|builder| {
+                    builder.with_execution_providers([ort::ep::CUDA::default()
+                        .with_device_id(device_id)
+                        .build()
+                        .error_on_failure()])
+                })
+                .map_err(ort::Error::<()>::from)?)
+        };
+        let cpu_builder = Session::builder(environment)?
+            .with_no_environment_execution_providers()
+            .map_err(ort::Error::<()>::from)?;
+
+        Ok(Self {
+            speech_encoder: speech_encoder::Metadata {
+                variant: model::Variant::<f32>::FP32,
+            },
+            speech_encoder_session_builder: Some(cuda_builder()?),
+            token_embedder: token_embedder::Metadata {
+                variant: model::Variant::<f32>::FP32,
+            },
+            token_embedder_session_builder: Some(cpu_builder),
+            language_model: language_model::Metadata {
+                variant: model::Variant::<half::f16>::Q4_FP16,
+            },
+            language_model_session_builder: Some(cuda_builder()?),
+            language_model_kv_device: KvCacheDevice::Cuda { device_id },
+            conditional_decoder: conditional_decoder::Metadata {
+                variant: model::Variant::<f32>::FP32,
+            },
+            conditional_decoder_session_builder: Some(cuda_builder()?),
+            sample_rate: 24000,
+            num_kv_heads: 16,
+            head_dim: 64,
+        })
     }
 }
 
@@ -125,10 +222,38 @@ where
 }
 
 impl ChatterboxTurbo<f32, f32, f32, f32> {
-    /// Loads all four components at [`f32`]/`int8` defaults (see
-    /// [`LoadOptions::default`]).
-    pub fn load(environment: &Environment) -> Result<Self, Error> {
-        Self::load_with_options(environment, LoadOptions::default())
+    /// Loads all four components with the CPU defaults (see
+    /// [`LoadOptions::default`]). On a CUDA GPU, use `load_cuda` instead
+    /// (`cuda` feature).
+    pub fn load() -> Result<Self, Error> {
+        Self::load_with_environment(&default_environment()?)
+    }
+
+    /// Like [`Self::load`], in a caller-supplied ONNX Runtime [`Environment`].
+    pub fn load_with_environment(environment: &Environment) -> Result<Self, Error> {
+        Self::load_with_environment_and_options(environment, LoadOptions::default())
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
+impl ChatterboxTurbo<f32, f32, half::f16, f32> {
+    /// Loads all four components with the [`LoadOptions::cuda`] preset, on CUDA
+    /// device `device_id` (usually `0`).
+    pub fn load_cuda(device_id: i32) -> Result<Self, Error> {
+        Self::load_cuda_with_environment(&default_environment()?, device_id)
+    }
+
+    /// Like [`Self::load_cuda`], in a caller-supplied ONNX Runtime
+    /// [`Environment`].
+    pub fn load_cuda_with_environment(
+        environment: &Environment,
+        device_id: i32,
+    ) -> Result<Self, Error> {
+        Self::load_with_environment_and_options(
+            environment,
+            LoadOptions::cuda_with_environment(environment, device_id)?,
+        )
     }
 }
 
@@ -143,8 +268,15 @@ where
     const STOP_SPEECH_TOKEN: i64 = 6562;
 
     /// Loads all four components per `options`, using each component's own
-    /// [`SessionBuilder`] when provided, or an `ort` default otherwise.
-    pub fn load_with_options(
+    /// [`SessionBuilder`] when provided, or a default one from the crate's
+    /// [`default_environment`] otherwise.
+    pub fn load_with_options(options: LoadOptions<S, T, L, C>) -> Result<Self, Error> {
+        Self::load_with_environment_and_options(&default_environment()?, options)
+    }
+
+    /// Like [`Self::load_with_options`], with components that have no
+    /// [`SessionBuilder`] of their own loaded in `environment`.
+    pub fn load_with_environment_and_options(
         environment: &Environment,
         options: LoadOptions<S, T, L, C>,
     ) -> Result<Self, Error> {
@@ -298,7 +430,8 @@ where
             // token_embedder's output is typed T; normalized to f32 immediately
             // since that's what language_model's inputs_embeds always needs
             let mut input_embeds = if tokens_generated == 0 {
-                // Prefill: the text prompt, embedded by the graph once per request.
+                // Prefill: the text prompt, embedded by the graph once per
+                // request.
                 model::to_f32(self.token_embedder.embed_tokens(input_ids.clone())?)
             } else {
                 // Generation: speech tokens, looked up in the prebuilt table.

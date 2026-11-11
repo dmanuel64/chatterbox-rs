@@ -126,13 +126,12 @@ impl<F: Float + 'static> Variant<F> {
                 }
             }
             Kind::Quantized { weight_packing } => {
-                let mut o = if let WeightPacking::Bit8 = weight_packing {
-                    String::from("_quantized")
-                } else {
-                    String::from("")
-                };
+                let mut o = String::from(match weight_packing {
+                    WeightPacking::Bit8 => "_quantized",
+                    WeightPacking::Bit4 => "_q4",
+                });
                 if float_type != TypeId::of::<f32>() {
-                    o += &format!("_f{graph_size}");
+                    o += &format!("f{graph_size}");
                 }
                 o
             }
