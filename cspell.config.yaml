@@ -16,6 +16,7 @@ words:
   - Logits
   - ndarray
   - Onnx
+  - replacen
   - reqwest
   - Resampler
   - thiserror
