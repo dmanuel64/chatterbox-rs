@@ -82,7 +82,7 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
                 variant: model::Variant::<f32>::INT8,
             },
             conditional_decoder_session_builder: None,
-            sample_rate: 2400,
+            sample_rate: 24000,
             num_kv_heads: 16,
             head_dim: 64,
         }
