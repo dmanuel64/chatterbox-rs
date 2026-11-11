@@ -1,5 +1,5 @@
-//! Fetches ONNX graphs, weights, and the tokenizer from Hugging Face into [`config::ONNX_DIR`] /
-//! [`config::TOKENIZER_PATH`].
+//! Fetches ONNX graphs, weights, and the tokenizer from Hugging Face into
+//! [`config::ONNX_DIR`] / [`config::TOKENIZER_PATH`].
 
 use futures::{StreamExt, TryStreamExt, stream};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -28,7 +28,8 @@ pub enum Error {
     /// Writing the downloaded bytes to disk failed.
     #[error("failed to stream file: {source}")]
     Streaming { url: Url, source: io::Error },
-    /// A repo owner, name, branch, or file path couldn't be turned into a valid URL segment.
+    /// A repo owner, name, branch, or file path couldn't be turned into a valid
+    /// URL segment.
     #[error("invalid {kind} name: '{name}'")]
     InvalidName {
         name: String,
@@ -214,8 +215,8 @@ async fn download_chatterbot_file(
     .await
 }
 
-/// A single file to fetch: a source path relative to the Hugging Face repo, a local destination,
-/// and whether to re-download it even if it already exists.
+/// A single file to fetch: a source path relative to the Hugging Face repo, a
+/// local destination, and whether to re-download it even if it already exists.
 pub struct SourceDest {
     pub source: String,
     pub dest: PathBuf,
@@ -294,8 +295,8 @@ async fn download_onnx_files<F: Float + 'static>(
     download_chatterbot_files(&targets, use_patched_models).await
 }
 
-/// Downloads all four ONNX graphs (and their weights) for `variant`, overwriting any files
-/// already present when `force` is `true`.
+/// Downloads all four ONNX graphs (and their weights) for `variant`,
+/// overwriting any files already present when `force` is `true`.
 pub async fn download_model<F: Float + 'static>(
     variant: model::Variant<F>,
     force: bool,
@@ -330,14 +331,15 @@ fn tokenizer_target(force: bool) -> SourceDest {
     }
 }
 
-/// Downloads the tokenizer, overwriting it if it's already present and `force` is `true`.
+/// Downloads the tokenizer, overwriting it if it's already present and `force`
+/// is `true`.
 pub async fn download_tokenizer(force: bool, use_patched_models: bool) -> Result<(), Error> {
     let targets = [tokenizer_target(force)];
     download_chatterbot_files(&targets, use_patched_models).await
 }
 
-/// Downloads `variant`'s ONNX graphs, weights, and the tokenizer, skipping any files that
-/// already exist on disk.
+/// Downloads `variant`'s ONNX graphs, weights, and the tokenizer, skipping any
+/// files that already exist on disk.
 pub async fn download_missing<F: Float + 'static>(
     variant: model::Variant<F>,
     use_patched_models: bool,
@@ -360,11 +362,14 @@ pub async fn download_missing<F: Float + 'static>(
     Ok(())
 }
 
-/// Like [`download_missing`], but lets `language_model` use a different variant/precision from
-/// `speech_encoder`/`token_embedder`/`conditional_decoder`. Useful when only `language_model`'s
-/// precision is meant to vary (e.g. because the other three are restricted to [`f32`] without the
-/// `custom-variants` feature). Downloads each component's own files exactly once, rather than
-/// calling [`download_missing`] twice and fetching both variants' copies of the fixed components.
+/// Like [`download_missing`], but lets `language_model` use a different
+/// variant/precision from
+/// `speech_encoder`/`token_embedder`/`conditional_decoder`. Useful when only
+/// `language_model`'s precision is meant to vary (e.g. because the other three
+/// are restricted to [`f32`] without the `custom-variants` feature). Downloads
+/// each component's own files exactly once, rather than calling
+/// [`download_missing`] twice and fetching both variants' copies of the fixed
+/// components.
 pub async fn download_missing_split<S: Float + 'static, L: Float + 'static>(
     non_language_model_variant: model::Variant<S>,
     language_model_variant: model::Variant<L>,

@@ -27,8 +27,8 @@ pub static MAX_CONCURRENT_DOWNLOADS: LazyLock<RwLock<usize>> = LazyLock::new(|| 
 /// If download progress should be displayed via progress bar.
 #[cfg(feature = "download")]
 pub static SHOW_DOWNLOAD_PROGRESS: LazyLock<RwLock<bool>> = LazyLock::new(|| RwLock::new(true));
-/// HuggingFace authentication token. Populating this will make downloads more faster. Defaults to the environment's
-/// `HF_TOKEN` variable.
+/// HuggingFace authentication token. Populating this will make downloads more
+/// faster. Defaults to the environment's `HF_TOKEN` variable.
 #[cfg(feature = "download")]
 pub static HF_TOKEN: LazyLock<RwLock<Option<String>>> =
     LazyLock::new(|| RwLock::new(env::var("HF_TOKEN").ok()));
