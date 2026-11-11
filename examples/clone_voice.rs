@@ -1,13 +1,12 @@
 use chatterbox_rs::{
-    ChatterboxTurbo, GenerateOptions, LoadOptions, conditional_decoder, language_model, model,
-    speech_encoder, token_embedder,
+    ChatterboxTurbo, GenerateOptions, LoadOptions, conditional_decoder,
+    language_model::{self, KvCacheDevice},
+    model, speech_encoder, token_embedder,
 };
 use clap::{Parser, ValueEnum};
 use color_eyre::Result;
 use half::f16;
-#[cfg(feature = "cuda")]
-use ort::session::Session;
-use ort::{environment::Environment, session::builder::SessionBuilder};
+use ort::{environment::Environment, session::Session};
 use std::path::PathBuf;
 
 /// Clone a voice from a reference clip and synthesize new speech from text.
@@ -55,28 +54,6 @@ enum ModelVariant {
     Q4Fp16,
 }
 
-fn maybe_cuda_builder(environment: &Environment, cuda: bool) -> Result<Option<SessionBuilder>> {
-    #[cfg(feature = "cuda")]
-    {
-        Ok(if cuda {
-            Some(
-                Session::builder(environment)?
-                    .with_execution_providers([ort::ep::CUDA::default().build().fail_silently()])
-                    .map_err(ort::Error::<()>::from)?,
-            )
-        } else {
-            None
-        })
-    }
-    #[cfg(not(feature = "cuda"))]
-    {
-        if cuda {
-            eprintln!("warning: --cuda requires building with `--features cuda`; ignoring");
-        }
-        Ok(None)
-    }
-}
-
 async fn run<L: model::Precision>(
     environment: &Environment,
     variant: model::Variant<L>,
@@ -97,17 +74,26 @@ async fn run<L: model::Precision>(
             speech_encoder: speech_encoder::Metadata {
                 variant: model::Variant::<f32>::FP32,
             },
-            speech_encoder_session_builder: maybe_cuda_builder(environment, args.cuda)?,
+            speech_encoder_session_builder: None,
             token_embedder: token_embedder::Metadata {
                 variant: model::Variant::<f32>::FP32,
             },
-            token_embedder_session_builder: None,
+            token_embedder_session_builder: Some(
+                Session::builder(environment)?
+                    .with_no_environment_execution_providers()
+                    .map_err(ort::Error::<()>::from)?,
+            ),
             language_model: language_model::Metadata { variant },
-            language_model_session_builder: maybe_cuda_builder(environment, args.cuda)?,
+            language_model_session_builder: None,
+            language_model_kv_device: if cfg!(feature = "cuda") && args.cuda {
+                KvCacheDevice::Cuda { device_id: 0 }
+            } else {
+                KvCacheDevice::Cpu
+            },
             conditional_decoder: conditional_decoder::Metadata {
                 variant: model::Variant::<f32>::FP32,
             },
-            conditional_decoder_session_builder: maybe_cuda_builder(environment, args.cuda)?,
+            conditional_decoder_session_builder: None,
             sample_rate: 24000,
             num_kv_heads: 16,
             head_dim: 64,
@@ -121,8 +107,15 @@ async fn run<L: model::Precision>(
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+    let args = Args::parse();
 
-    let env = ort::init().build()?;
+    let env = ort::init()
+        .with_execution_providers([
+            #[cfg(feature = "cuda")]
+            ort::ep::CUDA::default().build().error_on_failure(),
+        ])
+        .build()?;
+
     println!("Discovered execution provider devices:");
     for device in env.devices() {
         let hw = device.hardware_device();
@@ -135,7 +128,6 @@ async fn main() -> Result<()> {
         );
     }
 
-    let args = Args::parse();
     match args.variant {
         ModelVariant::Fp32 => run(&env, model::Variant::<f32>::FP32, args).await,
         ModelVariant::Int8 => run(&env, model::Variant::<f32>::INT8, args).await,

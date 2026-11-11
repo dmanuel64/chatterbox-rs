@@ -6,7 +6,8 @@ use ndarray::{Array, Array2, Array4, ArrayD, Ix4};
 use num_traits::Float;
 use ort::{
     environment::Environment,
-    session::{Session, builder::SessionBuilder},
+    memory::{AllocationDevice, AllocatorType, MemoryInfo, MemoryType},
+    session::{IoBinding, Session, builder::SessionBuilder},
     value::{DynValue, Tensor},
 };
 
@@ -27,6 +28,31 @@ impl<F: Float + 'static> model::Metadata<F> for Metadata<F> {
     }
 }
 
+/// Where the language model's KV cache is kept between steps. Should match the
+/// execution provider the language model session runs on.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum KvCacheDevice {
+    #[default]
+    Cpu,
+    Cuda {
+        device_id: i32,
+    },
+}
+
+impl KvCacheDevice {
+    fn memory_info(self) -> Result<MemoryInfo<'static>, ort::Error> {
+        match self {
+            Self::Cpu => Ok(MemoryInfo::default()),
+            Self::Cuda { device_id } => MemoryInfo::new(
+                AllocationDevice::CUDA,
+                device_id,
+                AllocatorType::Device,
+                MemoryType::Default,
+            ),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct KvSlot {
     input_name: String,
@@ -40,6 +66,10 @@ struct KvSlot {
 pub struct Model<F: Float> {
     metadata: Metadata<F>,
     session: Session,
+    binding: IoBinding,
+    logits_name: String,
+    kv_mem: MemoryInfo<'static>,
+    host_mem: MemoryInfo<'static>,
     num_kv_heads: usize,
     head_dim: usize,
     past_key_values: Vec<KvSlot>,
@@ -61,11 +91,13 @@ impl<P: Precision> Model<P> {
     /// tensors.
     pub fn load(
         environment: &Environment,
+        kv_device: KvCacheDevice,
         metadata: Metadata<P>,
         num_kv_heads: usize,
         head_dim: usize,
     ) -> Result<Self, model::Error> {
         Self::load_with_builder(
+            kv_device,
             metadata,
             Session::builder(environment)?,
             num_kv_heads,
@@ -76,14 +108,22 @@ impl<P: Precision> Model<P> {
     /// Loads the model with a caller-supplied [`SessionBuilder`] (e.g. to
     /// configure an execution provider).
     pub fn load_with_builder(
+        kv_device: KvCacheDevice,
         metadata: Metadata<P>,
         mut builder: SessionBuilder,
         num_kv_heads: usize,
         head_dim: usize,
     ) -> Result<Self, model::Error> {
+        let session = builder.commit_from_file(metadata.graph_file())?;
+        let binding = session.create_binding()?;
+        let logits_name = session.outputs()[0].name().to_string();
         Ok(Self {
             metadata,
-            session: builder.commit_from_file(metadata.graph_file())?,
+            session,
+            binding,
+            logits_name,
+            kv_mem: kv_device.memory_info()?,
+            host_mem: MemoryInfo::default(),
             num_kv_heads,
             head_dim,
             past_key_values: Vec::new(),
@@ -140,17 +180,35 @@ impl<P: Precision> Model<P> {
         attention_mask: &Array2<i64>,
         position_ids: &Array2<i64>,
     ) -> Result<ArrayD<f32>, model::Error> {
-        let mut inputs = ort::inputs![
-            "inputs_embeds" => Tensor::from_array(inputs_embeds)?,
-            "attention_mask" => Tensor::from_array(attention_mask.clone())?,
-            "position_ids" => Tensor::from_array(position_ids.clone())?,
-        ];
+        // Inputs: small per-step tensors are copied to the device here; the KV
+        // cache is already there, so binding it copies nothing.
+        self.binding
+            .bind_input("inputs_embeds", &Tensor::from_array(inputs_embeds)?)?;
+        self.binding.bind_input(
+            "attention_mask",
+            &Tensor::from_array(attention_mask.clone())?,
+        )?;
+        self.binding
+            .bind_input("position_ids", &Tensor::from_array(position_ids.clone())?)?;
         for slot in &self.past_key_values {
-            inputs.push((slot.input_name.as_str().into(), (&slot.value).into()));
+            self.binding
+                .bind_input(slot.input_name.as_str(), &slot.value)?;
         }
 
-        let mut outputs = self.session.run(inputs)?;
-        let logits = outputs[0].try_extract_array::<f32>()?.into_owned();
+        // Outputs: rebind every step. Logits come back to the host for
+        // sampling; the new cache stays on the KV device.
+        self.binding.clear_outputs();
+        self.binding
+            .bind_output_to_device(self.logits_name.as_str(), &self.host_mem)?;
+        for slot in &self.past_key_values {
+            self.binding
+                .bind_output_to_device(slot.output_name.as_str(), &self.kv_mem)?;
+        }
+
+        let mut outputs = self.session.run_binding(&self.binding)?;
+        let logits = outputs[self.logits_name.as_str()]
+            .try_extract_array::<f32>()?
+            .into_owned();
         for slot in &mut self.past_key_values {
             slot.value = outputs
                 .remove(&slot.output_name)

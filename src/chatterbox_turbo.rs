@@ -1,8 +1,9 @@
 //! [`ChatterboxTurbo`], the top-level TTS pipeline for Chatterbox-Turbo.
 
 use crate::{
-    config, model,
-    model::{Precision, RestrictedPrecision},
+    config,
+    language_model::KvCacheDevice,
+    model::{self, Precision, RestrictedPrecision},
     models::{conditional_decoder, language_model, speech_encoder, token_embedder},
 };
 use ndarray::{concatenate, prelude::*};
@@ -51,6 +52,7 @@ where
     pub token_embedder_session_builder: Option<SessionBuilder>,
     pub language_model: language_model::Metadata<L>,
     pub language_model_session_builder: Option<SessionBuilder>,
+    pub language_model_kv_device: KvCacheDevice,
     pub conditional_decoder: conditional_decoder::Metadata<C>,
     pub conditional_decoder_session_builder: Option<SessionBuilder>,
     /// Sample rate (Hz) of the generated waveform.
@@ -78,6 +80,7 @@ impl Default for LoadOptions<f32, f32, f32, f32> {
                 variant: model::Variant::<f32>::INT8,
             },
             language_model_session_builder: None,
+            language_model_kv_device: KvCacheDevice::default(),
             conditional_decoder: conditional_decoder::Metadata {
                 variant: model::Variant::<f32>::INT8,
             },
@@ -153,6 +156,7 @@ where
             },
             language_model: if let Some(builder) = options.language_model_session_builder {
                 language_model::Model::load_with_builder(
+                    options.language_model_kv_device,
                     options.language_model,
                     builder,
                     options.num_kv_heads,
@@ -161,6 +165,7 @@ where
             } else {
                 language_model::Model::load(
                     environment,
+                    options.language_model_kv_device,
                     options.language_model,
                     options.num_kv_heads,
                     options.head_dim,

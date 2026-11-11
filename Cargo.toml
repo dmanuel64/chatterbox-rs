@@ -21,7 +21,7 @@ hound = "3"
 indicatif = "0.18"
 ndarray = "0.17"
 num-traits = "0.2"
-ort = { version = "2.0.0-rc.13", features = ["half"] }
+ort = { version = "2.0.0-rc.14", features = ["half"] }
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 rubato = "5"
 serde = { version = "1", features = ["derive"], optional = true }
@@ -40,7 +40,8 @@ url = { version = "2", optional = true }
 default = ["common-audio-formats"]
 
 cuda = ["ort/cuda"]
-# TODO: need to do manual export of ONNX models to get this to work for RT and RTX
+# TODO: need to do manual export of ONNX models to get this to work for RT and
+# RTX
 
 mp3 = ["symphonia/mp3"]
 mp4 = ["symphonia/aac", "symphonia/isomp4"]
